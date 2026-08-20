@@ -1,11 +1,13 @@
 package main
 
 import (
-	"log"
+	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
-	"repo-watch/internal/subscription/config"
-	"repo-watch/internal/subscription/service"
+	service "repo-watch/internal/subscription"
+	"repo-watch/pkg/logger"
 	"repo-watch/pkg/postgres"
 	"repo-watch/pkg/rabbitmq"
 	"syscall"
@@ -14,37 +16,47 @@ import (
 )
 
 func main() {
-	godotenv.Load()
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
-	cfg, err := config.Load()
+	_ = godotenv.Load()
+
+	logger := logger.NewLogger()
+
+	if err := run(ctx, logger); err != nil {
+		logger.Error("exited with error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, logger *slog.Logger) error {
+	cfg, err := service.LoadConfig()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	db, err := postgres.Connect(cfg.DbUrl)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("DB connect: %w", err)
+	}
+	defer db.Close()
+	if err = db.PingContext(ctx); err != nil {
+		return fmt.Errorf("DB ping: %w", err)
+	}
+	if err := service.ApplyMigrations(ctx, db); err != nil {
+		return fmt.Errorf("DB migrate: %w", err)
 	}
 
 	rabbit, err := rabbitmq.Connect(cfg.RabbitMQUrl)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("RabbitMQ connect: %w", err)
 	}
+	defer rabbit.Close()
 
-	service.NewService(service.Deps{
-		Db:     db,
+	return service.Run(ctx, service.Deps{
+		Cfg:    cfg,
+		Logger: logger,
+		DB:     db,
 		Rabbit: rabbit,
 	})
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(
-		sigCh,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-	)
-	defer signal.Stop(sigCh)
-	sig := <-sigCh
-
-	log.Println("exiting:", sig.String())
-
 }

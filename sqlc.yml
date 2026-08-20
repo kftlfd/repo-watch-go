@@ -1,0 +1,9 @@
+version: "2"
+
+sql:
+  - schema: "internal/subscription/database/migrations"
+    queries: "internal/subscription/database/queries"
+    engine: "postgresql"
+    gen:
+      go:
+        out: "internal/subscription/database"
