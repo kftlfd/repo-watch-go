@@ -7,20 +7,25 @@ import (
 )
 
 type SubscriptionConfig struct {
-	DbUrl       string
-	RabbitMQUrl string
+	DbBaseUrl string
+	DbUrl     string
+	DbName    string
+
+	RabbitMQUrl        string
 }
 
 func Load() (SubscriptionConfig, error) {
 	cfg := SubscriptionConfig{
-		DbUrl:       os.Getenv("DB_URL"),
-		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
+		DbBaseUrl: os.Getenv("POSTGRES_URL"),
+		DbName:    "subscription_db",
+
+		RabbitMQUrl:        os.Getenv("RABBITMQ_URL"),
 	}
 
-	if cfg.DbUrl == "" {
-		return cfg, fmt.Errorf("no DB_URL")
+	if cfg.DbBaseUrl == "" {
+		return cfg, fmt.Errorf("no POSTGRES_URL")
 	}
-	cfg.DbUrl = postgres.CreateDbUrl(cfg.DbUrl, "subscription_db")
+	cfg.DbUrl = postgres.CreateDbUrl(cfg.DbBaseUrl, cfg.DbName)
 
 	if cfg.RabbitMQUrl == "" {
 		return cfg, fmt.Errorf("no RABBITMQ_URL")

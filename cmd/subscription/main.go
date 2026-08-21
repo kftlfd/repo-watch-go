@@ -35,6 +35,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	if err = postgres.EnsureDbExists(ctx, cfg.DbBaseUrl, cfg.DbName); err != nil {
+		return fmt.Errorf("ensure DB exists: %w", err)
+	}
 	db, err := postgres.Connect(cfg.DbUrl)
 	if err != nil {
 		return fmt.Errorf("DB connect: %w", err)
@@ -43,7 +46,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	if err = db.PingContext(ctx); err != nil {
 		return fmt.Errorf("DB ping: %w", err)
 	}
-	if err := service.ApplyMigrations(ctx, db); err != nil {
+	if err := postgres.Migrate(ctx, db, service.MigrationsFS); err != nil {
 		return fmt.Errorf("DB migrate: %w", err)
 	}
 

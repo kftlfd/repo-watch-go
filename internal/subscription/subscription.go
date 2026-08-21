@@ -5,18 +5,16 @@ import (
 	"database/sql"
 	"log/slog"
 	"repo-watch/internal/subscription/config"
-	"repo-watch/internal/subscription/database"
+	"repo-watch/internal/subscription/database/migrations"
 	"repo-watch/internal/subscription/server"
 
 	"github.com/rabbitmq/amqp091-go"
 )
 
+var MigrationsFS = migrations.MigrationsFS
+
 func LoadConfig() (config.SubscriptionConfig, error) {
 	return config.Load()
-}
-
-func ApplyMigrations(ctx context.Context, db *sql.DB) error {
-	return database.ApplyMigrations(ctx, db)
 }
 
 type Deps struct {

@@ -20,6 +20,43 @@ func Connect(url string) (*sql.DB, error) {
 	return conn, err
 }
 
+func EnsureDbExists(ctx context.Context, baseDbUrl, dbName string) error {
+	db, err := Connect(CreateDbUrl(baseDbUrl, ""))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	exists := false
+
+	err = db.QueryRowContext(
+		ctx,
+		`SELECT EXISTS (
+			SELECT 1
+			FROM pg_database
+			WHERE datname = $1
+		)`,
+		dbName,
+	).Scan(&exists)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		return nil
+	}
+
+	_, err = db.ExecContext(
+		ctx,
+		"CREATE DATABASE "+dbName,
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func Migrate(ctx context.Context, db *sql.DB, migrationsFS fs.FS) error {
 	locker, err := lock.NewPostgresSessionLocker()
 	if err != nil {
@@ -35,7 +72,6 @@ func Migrate(ctx context.Context, db *sql.DB, migrationsFS fs.FS) error {
 	if err != nil {
 		return fmt.Errorf("create migration provider: %w", err)
 	}
-	defer provider.Close()
 
 	_, err = provider.Up(ctx)
 	if err != nil {

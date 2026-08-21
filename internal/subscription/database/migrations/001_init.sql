@@ -15,7 +15,7 @@ CREATE TABLE subscriptions (
     email TEXT NOT NULL,
     repository_id TEXT NOT NULL REFERENCES repositories (id),
     active BOOLEAN NOT NULL DEFAULT false,
-    active_state_version INTEGER NOT NULL DEFAULT 0,
+    version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP NOT NULL DEFAULT now(),
     updated_at TIMESTAMP NOT NULL DEFAULT now(),
     UNIQUE (email, repository_id)
@@ -34,10 +34,10 @@ WHERE
     published_at IS NULL;
 
 -- +goose Down
-DROP TABLE repositories;
+DROP INDEX IF EXISTS outbox_unpublished_idx;
 
-DROP TABLE subscriptions;
+DROP TABLE IF EXISTS outbox;
 
-DROP TABLE outbox;
+DROP TABLE IF EXISTS subscriptions;
 
-DROP INDEX outbox_unpublished_idx;
+DROP TABLE IF EXISTS repositories;
