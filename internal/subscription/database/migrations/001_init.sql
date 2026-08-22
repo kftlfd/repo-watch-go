@@ -1,10 +1,11 @@
 -- +goose Up
 CREATE TABLE repositories (
     id TEXT PRIMARY KEY,
-    github_owner TEXT NOT NULL,
-    github_name TEXT NOT NULL,
-    active_subscription_count INTEGER NOT NULL DEFAULT 0,
-    active_state_version INTEGER NOT NULL DEFAULT 0,
+    gh_owner TEXT NOT NULL,
+    gh_name TEXT NOT NULL,
+    init_tag TEXT NOT NULL,
+    active_subscriptions_count INTEGER NOT NULL DEFAULT 0,
+    active_version INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT now(),
     updated_at TIMESTAMP NOT NULL DEFAULT now(),
     UNIQUE (github_owner, github_name)
@@ -15,10 +16,18 @@ CREATE TABLE subscriptions (
     email TEXT NOT NULL,
     repository_id TEXT NOT NULL REFERENCES repositories (id),
     active BOOLEAN NOT NULL DEFAULT false,
-    version INTEGER NOT NULL DEFAULT 1,
+    active_version INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT now(),
     updated_at TIMESTAMP NOT NULL DEFAULT now(),
     UNIQUE (email, repository_id)
+);
+
+CREATE TABLE tokens (
+    id SERIAL PRIMARY KEY,
+    subscription_id INTEGER NOT NULL REFERENCES subscriptions (id),
+    token_type TEXT NOT NULL,
+    token_val TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE outbox (
@@ -37,6 +46,8 @@ WHERE
 DROP INDEX IF EXISTS outbox_unpublished_idx;
 
 DROP TABLE IF EXISTS outbox;
+
+DROP TABLE IF EXISTS tokens;
 
 DROP TABLE IF EXISTS subscriptions;
 

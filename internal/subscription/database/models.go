@@ -19,21 +19,30 @@ type Outbox struct {
 }
 
 type Repository struct {
-	ID                      string
-	GithubOwner             string
-	GithubName              string
-	ActiveSubscriptionCount int32
-	ActiveStateVersion      int32
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
+	ID                       string
+	GhOwner                  string
+	GhName                   string
+	InitTag                  string
+	ActiveSubscriptionsCount int32
+	ActiveVersion            int32
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
 }
 
 type Subscription struct {
-	ID                 int32
-	Email              string
-	RepositoryID       string
-	Active             bool
-	ActiveStateVersion int32
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID            int32
+	Email         string
+	RepositoryID  string
+	Active        bool
+	ActiveVersion int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type Token struct {
+	ID             int32
+	SubscriptionID int32
+	TokenType      string
+	TokenVal       string
+	CreatedAt      time.Time
 }
