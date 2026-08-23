@@ -2,10 +2,10 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"repo-watch/internal/subscription/subs"
@@ -27,40 +27,50 @@ type server struct {
 func NewServer(d ServerDeps) *server {
 	logger := d.Logger.WithGroup("server")
 
+	handler := NewHandler(HandlerDeps{
+		Logger:      logger,
+		SubsService: d.SubsService,
+	})
+
+	srv := &http.Server{
+		Addr:    d.Host + ":" + d.Port,
+		Handler: handler,
+	}
+
 	return &server{
-		logger: logger,
-		httpServer: &http.Server{
-			Addr: d.Host + ":" + d.Port,
-			Handler: NewHandler(HandlerDeps{
-				Logger:      logger,
-				SubsService: d.SubsService,
-			}),
-		},
+		logger:     logger,
+		httpServer: srv,
 	}
 }
 
-func (s *server) Start() error {
-	s.logger.Info("server starting",
+func (s *server) Start(ctx context.Context, cancelCtx context.CancelCauseFunc, shutdownTimeout time.Duration) {
+	s.logger.Info("starting",
 		slog.String("addr", s.httpServer.Addr),
 	)
 
-	err := s.httpServer.ListenAndServe()
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("server error: %w", err)
+	errCh := make(chan error, 1)
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
+	wg.Go(func() {
+		errCh <- s.httpServer.ListenAndServe()
+	})
+
+	select {
+	case err := <-errCh:
+		s.logger.Error("unexpected exit", "error", err)
+		cancelCtx(fmt.Errorf("server exit: %w", err))
+
+	case <-ctx.Done():
+		s.logger.Info("shutting down")
+
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+
+		if err := s.httpServer.Shutdown(timeoutCtx); err != nil {
+			s.logger.Error("server shutdown error", "error", err)
+		}
 	}
-
-	return nil
-}
-
-func (s *server) Shutdown() error {
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := s.httpServer.Shutdown(timeoutCtx); err != nil {
-		return fmt.Errorf("server shutdown error: %w", err)
-	}
-
-	return nil
 }
 
 type HandlerDeps struct {

@@ -25,13 +25,13 @@ type SubsService interface {
 type Deps struct {
 	GithubClient github.Client
 	DB           *sql.DB
-	Queries      database.Queries
+	Queries      *database.Queries
 }
 
 type service struct {
 	gh github.Client
 	db *sql.DB
-	q  database.Queries
+	q  *database.Queries
 }
 
 func NewService(d Deps) *service {
