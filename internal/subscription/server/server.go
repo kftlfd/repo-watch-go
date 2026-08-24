@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -43,7 +44,7 @@ func NewServer(d ServerDeps) *server {
 	}
 }
 
-func (s *server) Start(ctx context.Context, cancelCtx context.CancelCauseFunc, shutdownTimeout time.Duration) {
+func (s *server) Start(ctx context.Context, cancelCtx context.CancelCauseFunc) {
 	s.logger.Info("starting",
 		slog.String("addr", s.httpServer.Addr),
 	)
@@ -63,11 +64,8 @@ func (s *server) Start(ctx context.Context, cancelCtx context.CancelCauseFunc, s
 
 	case <-ctx.Done():
 		s.logger.Info("shutting down")
-
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-
-		if err := s.httpServer.Shutdown(timeoutCtx); err != nil {
+		err := s.httpServer.Shutdown(context.Background())
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.logger.Error("server shutdown error", "error", err)
 		}
 	}

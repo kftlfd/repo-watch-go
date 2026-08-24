@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	service "repo-watch/internal/subscription"
+	"repo-watch/internal/subscription/config"
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/database/migrations"
 	"repo-watch/internal/subscription/server"
@@ -42,15 +42,12 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	var wg sync.WaitGroup
-	defer wg.Wait()
-
-	wg.Go(func() {
+	go func() {
 		<-ctx.Done()
 		stop()
-	})
+	}()
 
-	cfg, err := service.LoadConfig()
+	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -92,13 +89,29 @@ func run(logger *slog.Logger) error {
 		Port:        "8080",
 	})
 
-	shutdownTimeout := 5 * time.Second
+	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		srv.Start(ctx, cancel, shutdownTimeout)
+		srv.Start(ctx, cancel)
 	})
 
 	<-ctx.Done()
+
+	shutdownTimer := time.NewTimer(10 * time.Second)
+	defer shutdownTimer.Stop()
+
+	allDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(allDone)
+	}()
+
+	select {
+	case <-shutdownTimer.C:
+		return fmt.Errorf("shutdown timeout")
+	case <-allDone:
+	}
+
 	if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
 		return fmt.Errorf("ctx cause: %w", cause)
 	}
