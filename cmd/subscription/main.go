@@ -6,15 +6,16 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"repo-watch/internal/github"
+	"repo-watch/internal/logger"
+	"repo-watch/internal/postgres"
+	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/config"
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/database/migrations"
+	"repo-watch/internal/subscription/outbox"
 	"repo-watch/internal/subscription/server"
 	"repo-watch/internal/subscription/subs"
-	"repo-watch/pkg/github"
-	"repo-watch/pkg/logger"
-	"repo-watch/pkg/postgres"
-	"repo-watch/pkg/rabbitmq"
 	"sync"
 	"syscall"
 	"time"
@@ -36,6 +37,8 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
+	logger.Info("starting up...")
+
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 
@@ -52,6 +55,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	logger.Info("preparing DB...")
 	if err = postgres.EnsureDbExists(ctx, cfg.DbBaseUrl, cfg.DbName); err != nil {
 		return fmt.Errorf("ensure DB exists: %w", err)
 	}
@@ -67,49 +71,94 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("DB migrate: %w", err)
 	}
 
+	logger.Info("preparing rabbitmq...")
 	rabbit, err := rabbitmq.Connect(cfg.RabbitMQUrl)
 	if err != nil {
 		return fmt.Errorf("RabbitMQ connect: %w", err)
 	}
 	defer rabbit.Close()
+	if err := rabbitmq.EnsureTopology(rabbit); err != nil {
+		return fmt.Errorf("ensure rabbit topology: %w", err)
+	}
 
-	gh := github.NewClient()
+	logger.Info("initiating components...")
 
-	q := database.New(db)
+	githubClient := github.NewClient()
+
+	queries := database.New(db)
 
 	subsSvc := subs.NewService(subs.Deps{
 		DB:           db,
-		GithubClient: gh,
-		Queries:      q,
+		GithubClient: githubClient,
+		Queries:      queries,
 	})
 
-	srv := server.NewServer(server.ServerDeps{
+	httpServer := server.NewServer(server.ServerDeps{
 		Logger:      logger,
 		SubsService: subsSvc,
 		Port:        "8080",
 	})
 
+	pub, err := rabbitmq.NewPublisher(rabbit)
+	if err != nil {
+		return fmt.Errorf("rabbit publisher: %w", err)
+	}
+	defer pub.Close()
+
+	outboxDispatcher, err := outbox.NewDispatcher(outbox.Deps{
+		Cfg: outbox.Config{
+			BatchSize:            5,
+			LoopInterval:         10 * time.Second,
+			LeaseDuration:        60 * time.Second,
+			LoopIterationTimeout: 30 * time.Second,
+		},
+		Logger:  logger,
+		Pub:     pub,
+		Queries: queries,
+	})
+	if err != nil {
+		return fmt.Errorf("outbox dispatcher: %w", err)
+	}
+
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		srv.Start(ctx, cancel)
+		for {
+			select {
+			case ret := <-pub.Returns():
+				logger.Error("rabbitmq message returned", "msg", ret)
+			case <-ctx.Done():
+				return
+			}
+		}
 	})
 
-	<-ctx.Done()
+	wg.Go(func() {
+		outboxDispatcher.Start(ctx, cancel)
+	})
 
-	shutdownTimer := time.NewTimer(10 * time.Second)
-	defer shutdownTimer.Stop()
+	wg.Go(func() {
+		httpServer.Start(ctx, cancel)
+	})
 
-	allDone := make(chan struct{})
+	logger.Info("all components initiated")
+
+	allDone := make(chan struct{}, 1)
 	go func() {
 		wg.Wait()
 		close(allDone)
 	}()
 
+	<-ctx.Done()
+
+	logger.Info("shutting down...")
+
 	select {
-	case <-shutdownTimer.C:
+	case <-time.After(10 * time.Second):
 		return fmt.Errorf("shutdown timeout")
+
 	case <-allDone:
+		logger.Info("all components stopped")
 	}
 
 	if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
