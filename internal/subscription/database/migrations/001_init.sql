@@ -6,8 +6,8 @@ CREATE TABLE repositories (
     init_tag TEXT NOT NULL,
     active_subscriptions_count INTEGER NOT NULL DEFAULT 0,
     active_version INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (github_owner, github_name)
 );
 
@@ -17,8 +17,8 @@ CREATE TABLE subscriptions (
     repository_id TEXT NOT NULL REFERENCES repositories (id),
     active BOOLEAN NOT NULL DEFAULT false,
     active_version INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (email, repository_id)
 );
 
@@ -27,15 +27,16 @@ CREATE TABLE tokens (
     subscription_id INTEGER NOT NULL REFERENCES subscriptions (id),
     token_type TEXT NOT NULL,
     token_val TEXT NOT NULL UNIQUE,
-    created_at TIMESTAMP NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
     payload JSONB NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT now(),
-    published_at TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    leased_until TIMESTAMPTZ,
+    published_at TIMESTAMPTZ
 );
 
 CREATE INDEX outbox_unpublished_idx ON outbox (created_at)

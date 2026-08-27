@@ -7,7 +7,10 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+
+	"github.com/lib/pq"
 )
 
 const createOutboxRow = `-- name: CreateOutboxRow :one
@@ -15,7 +18,7 @@ INSERT INTO
     outbox (event_type, payload)
 VALUES
     ($1, $2)
-RETURNING id, event_type, payload, created_at, published_at
+RETURNING id, event_type, payload, created_at, leased_until, published_at
 `
 
 type CreateOutboxRowParams struct {
@@ -31,7 +34,73 @@ func (q *Queries) CreateOutboxRow(ctx context.Context, arg CreateOutboxRowParams
 		&i.EventType,
 		&i.Payload,
 		&i.CreatedAt,
+		&i.LeasedUntil,
 		&i.PublishedAt,
 	)
 	return i, err
+}
+
+const getOutboxBatch = `-- name: GetOutboxBatch :many
+WITH candidates AS (
+    SELECT id
+    FROM outbox
+    WHERE published_at IS NULL
+        AND (leased_until IS NULL OR leased_until < now())
+    ORDER BY id ASC
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE outbox
+SET leased_until = $2
+FROM candidates
+WHERE outbox.id = candidates.id
+RETURNING outbox.id, outbox.event_type, outbox.payload, outbox.created_at, outbox.leased_until, outbox.published_at
+`
+
+type GetOutboxBatchParams struct {
+	Limit       int32
+	LeasedUntil sql.NullTime
+}
+
+func (q *Queries) GetOutboxBatch(ctx context.Context, arg GetOutboxBatchParams) ([]Outbox, error) {
+	rows, err := q.db.QueryContext(ctx, getOutboxBatch, arg.Limit, arg.LeasedUntil)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Outbox
+	for rows.Next() {
+		var i Outbox
+		if err := rows.Scan(
+			&i.ID,
+			&i.EventType,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.LeasedUntil,
+			&i.PublishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markOutboxPublished = `-- name: MarkOutboxPublished :exec
+UPDATE outbox
+SET published_at = now(),
+    leased_until = NULL
+WHERE id = ANY($1::int[])
+    AND published_at IS NULL
+`
+
+func (q *Queries) MarkOutboxPublished(ctx context.Context, ids []int32) error {
+	_, err := q.db.ExecContext(ctx, markOutboxPublished, pq.Array(ids))
+	return err
 }

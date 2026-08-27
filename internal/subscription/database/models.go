@@ -15,6 +15,7 @@ type Outbox struct {
 	EventType   string
 	Payload     json.RawMessage
 	CreatedAt   time.Time
+	LeasedUntil sql.NullTime
 	PublishedAt sql.NullTime
 }
 
