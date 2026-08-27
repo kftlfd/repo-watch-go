@@ -3,10 +3,12 @@ package subs
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"repo-watch/internal/github"
+	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/database"
-	"repo-watch/pkg/github"
 	"time"
 )
 
@@ -109,11 +111,13 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return err
 	}
 
-	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
-		EventType: "email.send",
-		Payload:   []byte(`{"type":"send-confirmation-email","email":"email","token":"token"}`),
-	})
-	if err != nil {
+	if err = saveToOutbox(ctx, qtx,
+		rabbitmq.EventEmailQueued,
+		rabbitmq.EventEmailQueuedPayload{
+			Recipient: emailInfo.email,
+			Subject:   "confirm subscription",
+		},
+	); err != nil {
 		return err
 	}
 
@@ -181,28 +185,35 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
-		EventType: "subscription.changed",
-		Payload:   []byte(`"subscription changed event"` + updSub.Email + unsubToken.TokenVal),
-	})
-	if err != nil {
+	if err = saveToOutbox(ctx, qtx,
+		rabbitmq.EventSubscriptionChanged,
+		rabbitmq.EventSubscriptionChangedPayload{
+			SubscriptionID: unsubToken.TokenType,
+		},
+	); err != nil {
 		return err
 	}
 
 	if updRepo.ActiveVersion != repo.ActiveVersion {
-		_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
-			EventType: "repository.changed",
-			Payload:   []byte(`"repository active state changed"`),
-		})
-		if err != nil {
+		if err = saveToOutbox(ctx, qtx,
+			rabbitmq.EventRepositoryChanged,
+			rabbitmq.EventRepositoryChangedPayload{
+				RepositoryID: updRepo.ID,
+			},
+		); err != nil {
 			return err
 		}
 	}
 
-	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
-		EventType: "email.send",
-		Payload:   []byte(`"subscription confirmed email"`),
-	})
+	if err = saveToOutbox(ctx, qtx,
+		rabbitmq.EventEmailQueued,
+		rabbitmq.EventEmailQueuedPayload{
+			Recipient: updSub.Email,
+			Subject:   "subscription confirmed",
+		},
+	); err != nil {
+		return err
+	}
 
 	if err = tx.Commit(); err != nil {
 		return err
@@ -253,28 +264,35 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
-		EventType: "subscription.changed",
-		Payload:   []byte(`"subscription changed event"` + updSub.Email),
-	})
-	if err != nil {
+	if err = saveToOutbox(ctx, qtx,
+		rabbitmq.EventSubscriptionChanged,
+		rabbitmq.EventSubscriptionChangedPayload{
+			SubscriptionID: updSub.Email,
+		},
+	); err != nil {
 		return err
 	}
 
 	if updRepo.ActiveVersion != repo.ActiveVersion {
-		_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
-			EventType: "repository.changed",
-			Payload:   []byte(`"repository active state changed"`),
-		})
-		if err != nil {
+		if err = saveToOutbox(ctx, qtx,
+			rabbitmq.EventRepositoryChanged,
+			rabbitmq.EventRepositoryChangedPayload{
+				RepositoryID: "",
+			},
+		); err != nil {
 			return err
 		}
 	}
 
-	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
-		EventType: "email.send",
-		Payload:   []byte(`"unsubscribed email"`),
-	})
+	if err = saveToOutbox(ctx, qtx,
+		rabbitmq.EventEmailQueued,
+		rabbitmq.EventEmailQueuedPayload{
+			Recipient: "",
+			Subject:   "unsubscribed",
+		},
+	); err != nil {
+		return err
+	}
 
 	if err = tx.Commit(); err != nil {
 		return err
@@ -284,18 +302,24 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 }
 
 func (s *service) GetSubscriptionsList(ctx context.Context, email string) ([]string, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	if err != nil {
-		return nil, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	qtx := s.q.WithTx(tx)
-
-	subs, err := qtx.ListSubscriptionsByEmail(ctx, email)
+	subs, err := s.q.ListSubscriptionsByEmail(ctx, email)
 	if err != nil {
 		return nil, err
 	}
 
 	return subs, nil
+}
+
+func saveToOutbox(ctx context.Context, qtx *database.Queries, eventType string, eventPayload any) error {
+	jsonData, err := json.Marshal(eventPayload)
+	if err != nil {
+		return fmt.Errorf("json marshal event: %w", err)
+	}
+
+	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
+		EventType: eventType,
+		Payload:   jsonData,
+	})
+
+	return err
 }
