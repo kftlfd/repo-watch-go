@@ -10,12 +10,12 @@ const (
 	exchangeDefault    = ""
 	exchangeDeadLetter = "repo-watch.dlx"
 
-	queueDeadLetter          = "repo-watch.dlq"
-	queueRepositoryChanged   = "repo-watch.repository.changed"
-	queueSubscriptionChanged = "repo-watch.subscription.changed"
-	queueReleaseDetected     = "repo-watch.release.detected"
-	queueEmailQueued         = "repo-watch.email.queued"
+	queueDeadLetter = "repo-watch.dlq"
 )
+
+func GetQueueName(eventName string) string {
+	return "repo-watch." + eventName
+}
 
 func EnsureTopology(conn *amqp091.Connection) error {
 	ch, err := conn.Channel()
@@ -58,10 +58,10 @@ func EnsureTopology(conn *amqp091.Connection) error {
 	}
 
 	queues := []string{
-		queueSubscriptionChanged,
-		queueRepositoryChanged,
-		queueReleaseDetected,
-		queueEmailQueued,
+		GetQueueName(EventSubscriptionChanged),
+		GetQueueName(EventRepositoryChanged),
+		GetQueueName(EventReleaseDetected),
+		GetQueueName(EventEmailQueued),
 	}
 
 	for _, queueName := range queues {

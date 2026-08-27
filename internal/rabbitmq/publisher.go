@@ -5,17 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/rabbitmq/amqp091-go"
 )
 
-type publisher struct {
+type RabbitJSONPublisher interface {
+	PublishJSON(context.Context, EnvelopeJSON) error
+}
+
+type Publisher struct {
 	ch       *amqp091.Channel
 	returnCh chan amqp091.Return
 }
 
-func NewPublisher(conn *amqp091.Connection) (*publisher, error) {
+func NewPublisher(conn *amqp091.Connection) (*Publisher, error) {
 	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("create publisher channel: %w", err)
@@ -28,43 +31,52 @@ func NewPublisher(conn *amqp091.Connection) (*publisher, error) {
 
 	returnCh := ch.NotifyReturn(make(chan amqp091.Return, 1))
 
-	return &publisher{
+	return &Publisher{
 		ch:       ch,
 		returnCh: returnCh,
 	}, nil
 }
 
-func (p *publisher) Close() error {
+func (p *Publisher) Close() error {
 	return p.ch.Close()
 }
 
-func (p *publisher) Returns() <-chan amqp091.Return {
+func (p *Publisher) Returns() <-chan amqp091.Return {
 	return p.returnCh
 }
 
-func (p *publisher) publishJSON(
+func (p *Publisher) PublishJSON(
 	ctx context.Context,
-	exchange, routingKey string,
-	msgId string,
-	msgBody json.RawMessage,
+	msg EnvelopeJSON,
 ) error {
+	if msg.EventType == "" {
+		return fmt.Errorf("missing message type")
+	}
+
+	body, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("json marshal: %w", err)
+	}
+
+	routingKey := GetQueueName(msg.EventType)
+
 	publishing := amqp091.Publishing{
 		ContentType:  "application/json",
 		DeliveryMode: amqp091.Persistent,
-		MessageId:    msgId,
-		Body:         msgBody,
+		MessageId:    msg.EventID,
+		Body:         body,
 	}
 
 	confirmation, err := p.ch.PublishWithDeferredConfirmWithContext(
 		ctx,
-		exchange,
+		exchangeDefault,
 		routingKey,
 		true,  // mandatory
 		false, // immediate
 		publishing,
 	)
 	if err != nil {
-		return fmt.Errorf("publish event %q %q: %w", routingKey, msgId, err)
+		return fmt.Errorf("publish event %q %q: %w", msg.EventType, msg.EventID, err)
 	}
 	if confirmation == nil {
 		return errors.New("publisher confirmation was not created")
@@ -79,30 +91,4 @@ func (p *publisher) publishJSON(
 	}
 
 	return nil
-}
-
-type PublishEventMeta struct {
-	ID        string
-	CreatedAt time.Time
-}
-
-func Publish[T event](p *publisher, ctx context.Context, meta PublishEventMeta, ed eventDescriptor[T], ev T) error {
-	payload, err := json.Marshal(ev)
-	if err != nil {
-		return fmt.Errorf("json marshal payload: %w", err)
-	}
-
-	evEnvelope := envelopeJSON{
-		EventID:     meta.ID,
-		MessageType: ed.routingKey,
-		CreatedAt:   meta.CreatedAt,
-		Payload:     payload,
-	}
-
-	msgBody, err := json.Marshal(evEnvelope)
-	if err != nil {
-		return fmt.Errorf("json marshal msgBody: %w", err)
-	}
-
-	return p.publishJSON(ctx, exchangeDefault, ed.routingKey, meta.ID, msgBody)
 }

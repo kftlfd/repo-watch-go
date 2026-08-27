@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/rabbitmq/amqp091-go"
 )
@@ -18,12 +17,12 @@ const (
 	NackDiscard AckType = "nack-discard"
 )
 
-type consumer struct {
+type Consumer struct {
 	logger *slog.Logger
 	ch     *amqp091.Channel
 }
 
-func NewConsumer(conn *amqp091.Connection, logger *slog.Logger) (*consumer, error) {
+func NewConsumer(conn *amqp091.Connection, logger *slog.Logger) (*Consumer, error) {
 	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("create consumer channel: %w", err)
@@ -38,28 +37,28 @@ func NewConsumer(conn *amqp091.Connection, logger *slog.Logger) (*consumer, erro
 		return nil, fmt.Errorf("set consumer QoS: %w", err)
 	}
 
-	return &consumer{
+	return &Consumer{
 		logger: logger.WithGroup("event-consumer"),
 		ch:     ch,
 	}, nil
 }
 
-func (c *consumer) Close() error {
+func (c *Consumer) Close() error {
 	return c.ch.Close()
 }
 
-type jsonEvent struct {
-	MessageID  string
+type EventMeta struct {
 	RoutingKey string
-	Body       json.RawMessage
 }
 
-type jsonEventHandler func(ctx context.Context, event jsonEvent) (AckType, error)
+// if returning Ack: err must be nil
+// for Nack types: err must be non-nil
+type JSONEventHandler func(ctx context.Context, msg EnvelopeJSON, meta EventMeta) (AckType, error)
 
-func (c *consumer) consumeJSON(
+func (c *Consumer) ConsumeJSON(
 	ctx context.Context,
 	queueName string,
-	handler jsonEventHandler,
+	handler JSONEventHandler,
 ) error {
 	deliveries, err := c.ch.ConsumeWithContext(
 		ctx,
@@ -76,11 +75,7 @@ func (c *consumer) consumeJSON(
 	}
 
 	for delivery := range deliveries {
-		ack, err := handler(ctx, jsonEvent{
-			MessageID:  delivery.MessageId,
-			RoutingKey: delivery.RoutingKey,
-			Body:       delivery.Body,
-		})
+		ack, err := handleJsonMsg(ctx, delivery, handler)
 
 		if ack != Ack {
 			c.logger.Error("handler nack",
@@ -116,40 +111,11 @@ func (c *consumer) consumeJSON(
 	return nil
 }
 
-type ConsumeEventMeta struct {
-	EventID     string
-	MessageType string
-	CreatedAt   time.Time
-}
-
-// if returning Ack: err must be nil
-// for Nack types: err must be non-nil
-type EventHandler[T event] func(ConsumeEventMeta, T) (AckType, error)
-
-func Consume[T event](c *consumer, ctx context.Context, ed eventDescriptor[T], handler EventHandler[T]) error {
-	var h jsonEventHandler = func(ctx context.Context, event jsonEvent) (AckType, error) {
-		var envelope envelopeJSON
-		if err := json.Unmarshal(event.Body, &envelope); err != nil {
-			return NackDiscard, fmt.Errorf("invalid message envelope")
-		}
-
-		if envelope.MessageType != ed.messageType {
-			return NackDiscard, fmt.Errorf("unexpected message type %q, expected %q", envelope.MessageType, ed.messageType)
-		}
-
-		var payload T
-		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return NackDiscard, fmt.Errorf("invalid event payload")
-		}
-
-		meta := ConsumeEventMeta{
-			EventID:     envelope.EventID,
-			MessageType: envelope.MessageType,
-			CreatedAt:   envelope.CreatedAt,
-		}
-
-		return handler(meta, payload)
+func handleJsonMsg(ctx context.Context, delivery amqp091.Delivery, handler JSONEventHandler) (AckType, error) {
+	var msg EnvelopeJSON
+	if err := json.Unmarshal(delivery.Body, &msg); err != nil {
+		return NackDiscard, fmt.Errorf("invalid json envelope: %w", err)
 	}
 
-	return c.consumeJSON(ctx, ed.routingKey, h)
+	return handler(ctx, msg, EventMeta{RoutingKey: delivery.RoutingKey})
 }
