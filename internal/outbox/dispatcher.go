@@ -77,7 +77,7 @@ func NewDispatcher(d DispatcherDeps) (*Dispatcher, error) {
 }
 
 func (d *Dispatcher) Start(ctx context.Context, cancelCtx context.CancelCauseFunc) {
-	d.logger.Info("starting...")
+	d.logger.Info("starting dispatcher")
 
 	var wg sync.WaitGroup
 

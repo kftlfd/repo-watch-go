@@ -71,17 +71,18 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
-	logger.Info("starting up...")
+	logger.Info("starting up")
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	signalCtx, signalStop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer signalStop()
 
 	go func() {
-		<-ctx.Done()
-		stop()
+		<-signalCtx.Done()
+		cancel(context.Canceled)
+		signalStop()
 	}()
 
 	cfg, err := loadConfig()
@@ -89,7 +90,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	logger.Info("preparing DB...")
+	logger.Info("preparing DB")
 	if err = postgres.EnsureDbExists(ctx, cfg.DbBaseUrl, cfg.DbName); err != nil {
 		return fmt.Errorf("ensure DB exists: %w", err)
 	}
@@ -105,7 +106,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("DB migrate: %w", err)
 	}
 
-	logger.Info("preparing rabbitmq...")
+	logger.Info("preparing rabbitmq")
 	rabbit, err := rabbitmq.Connect(cfg.RabbitMQUrl)
 	if err != nil {
 		return fmt.Errorf("RabbitMQ connect: %w", err)
@@ -115,7 +116,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("ensure rabbit topology: %w", err)
 	}
 
-	logger.Info("initiating components...")
+	logger.Info("initiating components")
 
 	githubClient := github.NewClient()
 
@@ -140,7 +141,7 @@ func run(logger *slog.Logger) error {
 			LeaseDuration:        60 * time.Second,
 			LoopIterationTimeout: 30 * time.Second,
 		},
-		Logger:  logger.With("module", "outbox_dispatcher"),
+		Logger:  logger,
 		Pub:     pub,
 		Queries: queries,
 	})
@@ -202,7 +203,7 @@ func run(logger *slog.Logger) error {
 
 	<-ctx.Done()
 
-	logger.Info("shutting down...")
+	logger.Info("shutting down")
 
 	select {
 	case <-time.After(10 * time.Second):
