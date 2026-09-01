@@ -65,7 +65,7 @@ func NewDispatcher(d Deps) (*outbox.Dispatcher, error) {
 
 	ddeps := outbox.DispatcherDeps{
 		Config:    outbox.DispatcherConfig(d.Cfg),
-		Logger:    d.Logger.WithGroup("subscription_outbox"),
+		Logger:    d.Logger.With("module", "subsscription_outbox"),
 		Publisher: d.Pub,
 		Store:     store,
 		GetEventID: func(r outbox.Row) string {
