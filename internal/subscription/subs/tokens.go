@@ -17,5 +17,5 @@ func newToken() (string, error) {
 		return "", err
 	}
 
-	return base64.StdEncoding.EncodeToString(token), nil
+	return base64.RawURLEncoding.EncodeToString(token), nil
 }

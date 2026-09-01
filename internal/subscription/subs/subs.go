@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"repo-watch/internal/emails"
 	"repo-watch/internal/github"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/database"
@@ -13,25 +14,25 @@ import (
 )
 
 var (
+	ErrInvalidInput         = errors.New("invalid input")
 	ErrRepoNotFound         = errors.New("repo not found")
+	ErrRateLimit            = errors.New("rate limit")
+	ErrUpstreamError        = errors.New("upstream error")
 	ErrSubscriptionConflict = errors.New("active subscription already exist")
 )
 
-type SubsService interface {
-	ConfirmSubscription(ctx context.Context, token string) error
-	CreateSubscription(ctx context.Context, email, repo string) error
-	DeactivateSubscription(ctx context.Context, token string) error
-	GetSubscriptionsList(ctx context.Context, email string) ([]string, error)
+type GithubClient interface {
+	GetLatestReleaseTag(ctx context.Context, owner, repo string) (string, error)
 }
 
 type Deps struct {
-	GithubClient github.Client
+	GithubClient GithubClient
 	DB           *sql.DB
 	Queries      *database.Queries
 }
 
 type service struct {
-	gh github.Client
+	gh GithubClient
 	db *sql.DB
 	q  *database.Queries
 }
@@ -47,17 +48,23 @@ func NewService(d Deps) *service {
 func (s *service) CreateSubscription(ctx context.Context, email, repo string) error {
 	emailInfo, err := verifyEmailInfo(email)
 	if err != nil {
-		return err
+		return ErrInvalidInput
 	}
 
 	repoInfo, err := verifyRepoInfo(repo)
 	if err != nil {
-		return err
+		return ErrInvalidInput
 	}
 
 	tag, err := s.gh.GetLatestReleaseTag(ctx, repoInfo.owner, repoInfo.name)
 	if err != nil {
-		return ErrRepoNotFound
+		if errors.Is(err, github.ErrNotFound) {
+			return ErrRepoNotFound
+		}
+		if errors.Is(err, github.ErrRateLimit) {
+			return ErrRateLimit
+		}
+		return ErrUpstreamError
 	}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
@@ -68,33 +75,34 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 
 	qtx := s.q.WithTx(tx)
 
-	exists, err := qtx.ActiveSubscriptionExists(ctx, database.ActiveSubscriptionExistsParams{
-		Email:        emailInfo.email,
-		RepositoryID: repoInfo.repoId,
-	})
-	if err != nil {
-		return err
-	}
-	if exists {
-		return ErrSubscriptionConflict
-	}
-
 	_, err = qtx.CreateRepository(ctx, database.CreateRepositoryParams{
 		ID:      repoInfo.repoId,
-		GhOwner: repoInfo.owner,
-		GhName:  repoInfo.name,
+		Owner:   repoInfo.owner,
+		Name:    repoInfo.name,
 		InitTag: tag,
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = qtx.GetRepositoryByID(ctx, repoInfo.repoId)
+	}
 	if err != nil {
 		return err
 	}
 
-	sub, err := qtx.CreateSubscription(ctx, database.CreateSubscriptionParams{
+	dbSub, err := qtx.CreateSubscription(ctx, database.CreateSubscriptionParams{
 		Email:        emailInfo.email,
 		RepositoryID: repoInfo.repoId,
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		dbSub, err = qtx.GetSubscription(ctx, database.GetSubscriptionParams{
+			Email:        emailInfo.email,
+			RepositoryID: repoInfo.repoId,
+		})
+	}
 	if err != nil {
 		return err
+	}
+	if dbSub.Active {
+		return ErrSubscriptionConflict
 	}
 
 	tokenVal, err := newToken()
@@ -103,7 +111,7 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 	}
 
 	_, err = qtx.CreateToken(ctx, database.CreateTokenParams{
-		SubscriptionID: sub.ID,
+		SubscriptionID: dbSub.ID,
 		TokenType:      TokenTypeConfirm,
 		TokenVal:       tokenVal,
 	})
@@ -115,7 +123,11 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		rabbitmq.EventEmailQueued,
 		rabbitmq.EventEmailQueuedPayload{
 			Recipient: emailInfo.email,
-			Subject:   "confirm subscription",
+			Type:      emails.EmailConfirmSubscription,
+			Data: emails.EmailConfirmSubscriptionData{
+				RepoID:       repoInfo.repoId,
+				ConfirmToken: tokenVal,
+			},
 		},
 	); err != nil {
 		return err
@@ -188,7 +200,13 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 	if err = saveToOutbox(ctx, qtx,
 		rabbitmq.EventSubscriptionChanged,
 		rabbitmq.EventSubscriptionChangedPayload{
-			SubscriptionID: unsubToken.TokenType,
+			SubscriptionID: updSub.ID,
+			RepositoryID:   updRepo.ID,
+			Email:          updSub.Email,
+			Active:         updSub.Active,
+			Version:        updRepo.ActiveVersion,
+			UnsubToken:     unsubToken.TokenVal,
+			UpdatedAt:      updSub.UpdatedAt,
 		},
 	); err != nil {
 		return err
@@ -198,7 +216,12 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		if err = saveToOutbox(ctx, qtx,
 			rabbitmq.EventRepositoryChanged,
 			rabbitmq.EventRepositoryChangedPayload{
-				RepositoryID: updRepo.ID,
+				RepositoryID:       updRepo.ID,
+				Owner:              updRepo.Owner,
+				Name:               updRepo.Name,
+				Active:             updRepo.ActiveSubscriptionsCount > 0,
+				ActiveStateVersion: updRepo.ActiveVersion,
+				UpdatedAt:          updRepo.UpdatedAt,
 			},
 		); err != nil {
 			return err
@@ -209,7 +232,10 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		rabbitmq.EventEmailQueued,
 		rabbitmq.EventEmailQueuedPayload{
 			Recipient: updSub.Email,
-			Subject:   "subscription confirmed",
+			Type:      emails.EmailSubscribed,
+			Data: emails.EmailSubscribedData{
+				RepoID: updRepo.ID,
+			},
 		},
 	); err != nil {
 		return err
@@ -267,7 +293,12 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 	if err = saveToOutbox(ctx, qtx,
 		rabbitmq.EventSubscriptionChanged,
 		rabbitmq.EventSubscriptionChangedPayload{
-			SubscriptionID: updSub.Email,
+			SubscriptionID: updSub.ID,
+			RepositoryID:   updRepo.ID,
+			Email:          updSub.Email,
+			Active:         updSub.Active,
+			Version:        updSub.ActiveVersion,
+			UpdatedAt:      updSub.UpdatedAt,
 		},
 	); err != nil {
 		return err
@@ -277,7 +308,12 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		if err = saveToOutbox(ctx, qtx,
 			rabbitmq.EventRepositoryChanged,
 			rabbitmq.EventRepositoryChangedPayload{
-				RepositoryID: "",
+				RepositoryID:       updRepo.ID,
+				Owner:              updRepo.Owner,
+				Name:               updRepo.Name,
+				Active:             updRepo.ActiveSubscriptionsCount > 0,
+				ActiveStateVersion: updRepo.ActiveVersion,
+				UpdatedAt:          updRepo.UpdatedAt,
 			},
 		); err != nil {
 			return err
@@ -287,8 +323,11 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 	if err = saveToOutbox(ctx, qtx,
 		rabbitmq.EventEmailQueued,
 		rabbitmq.EventEmailQueuedPayload{
-			Recipient: "",
-			Subject:   "unsubscribed",
+			Recipient: updSub.Email,
+			Type:      emails.EmailUnsubscribed,
+			Data: emails.EmailUnsubscribedData{
+				RepoID: updRepo.ID,
+			},
 		},
 	); err != nil {
 		return err
