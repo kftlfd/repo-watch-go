@@ -13,9 +13,9 @@ const activateSubscription = `-- name: ActivateSubscription :one
 UPDATE subscriptions
 SET
     active = true,
-    version = CASE
-        WHEN active = false THEN version + 1
-        ELSE version
+    active_version = CASE
+        WHEN active = false THEN active_version + 1
+        ELSE active_version
     END,
     updated_at = now()
 WHERE id = $1
@@ -35,28 +35,6 @@ func (q *Queries) ActivateSubscription(ctx context.Context, id int32) (Subscript
 		&i.UpdatedAt,
 	)
 	return i, err
-}
-
-const activeSubscriptionExists = `-- name: ActiveSubscriptionExists :one
-SELECT EXISTS (
-    SELECT id, email, repository_id, active, active_version, created_at, updated_at
-    FROM subscriptions
-    WHERE email = $1
-        AND repository_id = $2
-        AND active = true
-)
-`
-
-type ActiveSubscriptionExistsParams struct {
-	Email        string
-	RepositoryID string
-}
-
-func (q *Queries) ActiveSubscriptionExists(ctx context.Context, arg ActiveSubscriptionExistsParams) (bool, error) {
-	row := q.db.QueryRowContext(ctx, activeSubscriptionExists, arg.Email, arg.RepositoryID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
 }
 
 const createSubscription = `-- name: CreateSubscription :one
@@ -92,9 +70,9 @@ const deactivateSubscription = `-- name: DeactivateSubscription :one
 UPDATE subscriptions
 SET
     active = false,
-    version = CASE
-        WHEN active = true THEN version + 1
-        ELSE version
+    active_version = CASE
+        WHEN active = true THEN active_version + 1
+        ELSE active_version
     END,
     updated_at = now()
 WHERE id = $1
@@ -103,6 +81,33 @@ RETURNING id, email, repository_id, active, active_version, created_at, updated_
 
 func (q *Queries) DeactivateSubscription(ctx context.Context, id int32) (Subscription, error) {
 	row := q.db.QueryRowContext(ctx, deactivateSubscription, id)
+	var i Subscription
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.RepositoryID,
+		&i.Active,
+		&i.ActiveVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getSubscription = `-- name: GetSubscription :one
+SELECT id, email, repository_id, active, active_version, created_at, updated_at
+FROM subscriptions
+WHERE email = $1
+    AND repository_id = $2
+`
+
+type GetSubscriptionParams struct {
+	Email        string
+	RepositoryID string
+}
+
+func (q *Queries) GetSubscription(ctx context.Context, arg GetSubscriptionParams) (Subscription, error) {
+	row := q.db.QueryRowContext(ctx, getSubscription, arg.Email, arg.RepositoryID)
 	var i Subscription
 	err := row.Scan(
 		&i.ID,

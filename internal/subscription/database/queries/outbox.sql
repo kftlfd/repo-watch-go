@@ -5,6 +5,11 @@ VALUES
     ($1, $2)
 RETURNING *;
 
+-- name: GetEventTypeCount :one
+SELECT count(*)
+FROM outbox
+WHERE event_type = $1;
+
 -- name: GetOutboxBatch :many
 WITH candidates AS (
     SELECT id

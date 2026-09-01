@@ -1,14 +1,14 @@
 -- +goose Up
 CREATE TABLE repositories (
     id TEXT PRIMARY KEY,
-    gh_owner TEXT NOT NULL,
-    gh_name TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    name TEXT NOT NULL,
     init_tag TEXT NOT NULL,
     active_subscriptions_count INTEGER NOT NULL DEFAULT 0,
     active_version INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (github_owner, github_name)
+    UNIQUE (owner, name)
 );
 
 CREATE TABLE subscriptions (

@@ -40,6 +40,19 @@ func (q *Queries) CreateOutboxRow(ctx context.Context, arg CreateOutboxRowParams
 	return i, err
 }
 
+const getEventTypeCount = `-- name: GetEventTypeCount :one
+SELECT count(*)
+FROM outbox
+WHERE event_type = $1
+`
+
+func (q *Queries) GetEventTypeCount(ctx context.Context, eventType string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getEventTypeCount, eventType)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getOutboxBatch = `-- name: GetOutboxBatch :many
 WITH candidates AS (
     SELECT id

@@ -21,8 +21,8 @@ type Outbox struct {
 
 type Repository struct {
 	ID                       string
-	GhOwner                  string
-	GhName                   string
+	Owner                    string
+	Name                     string
 	InitTag                  string
 	ActiveSubscriptionsCount int32
 	ActiveVersion            int32

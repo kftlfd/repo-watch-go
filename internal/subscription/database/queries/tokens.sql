@@ -5,6 +5,12 @@ VALUES
     ($1, $2, $3)
 RETURNING *;
 
+-- name: GetToken :one
+SELECT *
+FROM tokens
+WHERE subscription_id = $1
+    AND token_type = $2;
+
 -- name: FindToken :one
 SELECT *
 FROM tokens

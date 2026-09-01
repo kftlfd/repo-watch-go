@@ -98,3 +98,28 @@ func (q *Queries) FindTokenWDate(ctx context.Context, arg FindTokenWDateParams) 
 	)
 	return i, err
 }
+
+const getToken = `-- name: GetToken :one
+SELECT id, subscription_id, token_type, token_val, created_at
+FROM tokens
+WHERE subscription_id = $1
+    AND token_type = $2
+`
+
+type GetTokenParams struct {
+	SubscriptionID int32
+	TokenType      string
+}
+
+func (q *Queries) GetToken(ctx context.Context, arg GetTokenParams) (Token, error) {
+	row := q.db.QueryRowContext(ctx, getToken, arg.SubscriptionID, arg.TokenType)
+	var i Token
+	err := row.Scan(
+		&i.ID,
+		&i.SubscriptionID,
+		&i.TokenType,
+		&i.TokenVal,
+		&i.CreatedAt,
+	)
+	return i, err
+}

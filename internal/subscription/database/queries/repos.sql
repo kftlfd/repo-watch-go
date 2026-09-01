@@ -1,6 +1,6 @@
 -- name: CreateRepository :one
 INSERT INTO repositories 
-    (id, gh_owner, gh_name, init_tag)
+    (id, owner, name, init_tag)
 VALUES
     ($1, $2, $3, $4)
 ON CONFLICT (id) DO NOTHING
@@ -16,7 +16,7 @@ UPDATE repositories
 SET
     active_subscriptions_count = active_subscriptions_count + 1,
     active_version = CASE
-        WHEN active_subscription_count = 0 THEN active_version + 1
+        WHEN active_subscriptions_count = 0 THEN active_version + 1
         ELSE active_version
     END,
     updated_at = now()
@@ -31,7 +31,7 @@ SET
         ELSE active_subscriptions_count - 1
     END,
     active_version = CASE
-        WHEN active_subscription_count <= 1 THEN active_version + 1
+        WHEN active_subscriptions_count <= 1 THEN active_version + 1
         ELSE active_version
     END,
     updated_at = now()

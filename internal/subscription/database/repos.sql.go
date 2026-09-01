@@ -11,32 +11,32 @@ import (
 
 const createRepository = `-- name: CreateRepository :one
 INSERT INTO repositories 
-    (id, gh_owner, gh_name, init_tag)
+    (id, owner, name, init_tag)
 VALUES
     ($1, $2, $3, $4)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, gh_owner, gh_name, init_tag, active_subscriptions_count, active_version, created_at, updated_at
+RETURNING id, owner, name, init_tag, active_subscriptions_count, active_version, created_at, updated_at
 `
 
 type CreateRepositoryParams struct {
 	ID      string
-	GhOwner string
-	GhName  string
+	Owner   string
+	Name    string
 	InitTag string
 }
 
 func (q *Queries) CreateRepository(ctx context.Context, arg CreateRepositoryParams) (Repository, error) {
 	row := q.db.QueryRowContext(ctx, createRepository,
 		arg.ID,
-		arg.GhOwner,
-		arg.GhName,
+		arg.Owner,
+		arg.Name,
 		arg.InitTag,
 	)
 	var i Repository
 	err := row.Scan(
 		&i.ID,
-		&i.GhOwner,
-		&i.GhName,
+		&i.Owner,
+		&i.Name,
 		&i.InitTag,
 		&i.ActiveSubscriptionsCount,
 		&i.ActiveVersion,
@@ -54,12 +54,12 @@ SET
         ELSE active_subscriptions_count - 1
     END,
     active_version = CASE
-        WHEN active_subscription_count <= 1 THEN active_version + 1
+        WHEN active_subscriptions_count <= 1 THEN active_version + 1
         ELSE active_version
     END,
     updated_at = now()
 WHERE id = $1
-RETURNING id, gh_owner, gh_name, init_tag, active_subscriptions_count, active_version, created_at, updated_at
+RETURNING id, owner, name, init_tag, active_subscriptions_count, active_version, created_at, updated_at
 `
 
 func (q *Queries) DecrementRepositoryActiveCount(ctx context.Context, id string) (Repository, error) {
@@ -67,8 +67,8 @@ func (q *Queries) DecrementRepositoryActiveCount(ctx context.Context, id string)
 	var i Repository
 	err := row.Scan(
 		&i.ID,
-		&i.GhOwner,
-		&i.GhName,
+		&i.Owner,
+		&i.Name,
 		&i.InitTag,
 		&i.ActiveSubscriptionsCount,
 		&i.ActiveVersion,
@@ -79,7 +79,7 @@ func (q *Queries) DecrementRepositoryActiveCount(ctx context.Context, id string)
 }
 
 const getRepositoryByID = `-- name: GetRepositoryByID :one
-SELECT id, gh_owner, gh_name, init_tag, active_subscriptions_count, active_version, created_at, updated_at
+SELECT id, owner, name, init_tag, active_subscriptions_count, active_version, created_at, updated_at
 FROM repositories
 WHERE id = $1
 `
@@ -89,8 +89,8 @@ func (q *Queries) GetRepositoryByID(ctx context.Context, id string) (Repository,
 	var i Repository
 	err := row.Scan(
 		&i.ID,
-		&i.GhOwner,
-		&i.GhName,
+		&i.Owner,
+		&i.Name,
 		&i.InitTag,
 		&i.ActiveSubscriptionsCount,
 		&i.ActiveVersion,
@@ -105,12 +105,12 @@ UPDATE repositories
 SET
     active_subscriptions_count = active_subscriptions_count + 1,
     active_version = CASE
-        WHEN active_subscription_count = 0 THEN active_version + 1
+        WHEN active_subscriptions_count = 0 THEN active_version + 1
         ELSE active_version
     END,
     updated_at = now()
 WHERE id = $1
-RETURNING id, gh_owner, gh_name, init_tag, active_subscriptions_count, active_version, created_at, updated_at
+RETURNING id, owner, name, init_tag, active_subscriptions_count, active_version, created_at, updated_at
 `
 
 func (q *Queries) IncrementRepositoryActiveCount(ctx context.Context, id string) (Repository, error) {
@@ -118,8 +118,8 @@ func (q *Queries) IncrementRepositoryActiveCount(ctx context.Context, id string)
 	var i Repository
 	err := row.Scan(
 		&i.ID,
-		&i.GhOwner,
-		&i.GhName,
+		&i.Owner,
+		&i.Name,
 		&i.InitTag,
 		&i.ActiveSubscriptionsCount,
 		&i.ActiveVersion,

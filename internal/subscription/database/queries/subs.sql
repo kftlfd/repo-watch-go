@@ -6,27 +6,24 @@ VALUES
 ON CONFLICT (email, repository_id) DO NOTHING
 RETURNING *;
 
+-- name: GetSubscription :one
+SELECT *
+FROM subscriptions
+WHERE email = $1
+    AND repository_id = $2;
+
 -- name: GetSubscriptionByID :one
 SELECT *
 FROM subscriptions
 WHERE id = $1;
 
--- name: ActiveSubscriptionExists :one
-SELECT EXISTS (
-    SELECT *
-    FROM subscriptions
-    WHERE email = $1
-        AND repository_id = $2
-        AND active = true
-);
-
 -- name: ActivateSubscription :one
 UPDATE subscriptions
 SET
     active = true,
-    version = CASE
-        WHEN active = false THEN version + 1
-        ELSE version
+    active_version = CASE
+        WHEN active = false THEN active_version + 1
+        ELSE active_version
     END,
     updated_at = now()
 WHERE id = $1
@@ -36,9 +33,9 @@ RETURNING *;
 UPDATE subscriptions
 SET
     active = false,
-    version = CASE
-        WHEN active = true THEN version + 1
-        ELSE version
+    active_version = CASE
+        WHEN active = true THEN active_version + 1
+        ELSE active_version
     END,
     updated_at = now()
 WHERE id = $1
