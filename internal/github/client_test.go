@@ -9,15 +9,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"repo-watch/pkg/github"
+	"repo-watch/internal/github"
 )
 
 func TestClient(t *testing.T) {
-	t.Run("client is consistent with interface", func(t *testing.T) {
-		var client github.Client = github.NewClient()
-		require.NotNil(t, client)
-	})
-
 	t.Run("gets release", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/repos/owner/repo/releases/latest" {

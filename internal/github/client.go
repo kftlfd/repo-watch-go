@@ -18,10 +18,6 @@ var (
 
 const defaultBaseURL = "https://api.github.com"
 
-type Client interface {
-	GetLatestReleaseTag(ctx context.Context, owner, repo string) (string, error)
-}
-
 type githubClient struct {
 	baseURL string
 	apiKey  string
