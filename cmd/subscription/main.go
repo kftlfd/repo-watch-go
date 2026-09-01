@@ -7,21 +7,55 @@ import (
 	"os"
 	"os/signal"
 	"repo-watch/internal/github"
+	"repo-watch/internal/httpserver"
 	"repo-watch/internal/logger"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/subscription/config"
+	"repo-watch/internal/subscription/admin"
+	"repo-watch/internal/subscription/api"
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/database/migrations"
 	"repo-watch/internal/subscription/outbox"
-	"repo-watch/internal/subscription/server"
 	"repo-watch/internal/subscription/subs"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
+
+type Config struct {
+	IsDev bool
+
+	DbBaseUrl string
+	DbUrl     string
+	DbName    string
+
+	RabbitMQUrl string
+}
+
+func loadConfig() (Config, error) {
+	cfg := Config{
+		IsDev: os.Getenv("ENV") == "dev",
+
+		DbBaseUrl: os.Getenv("POSTGRES_URL"),
+		DbName:    "subscription_db",
+
+		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
+	}
+
+	if cfg.DbBaseUrl == "" {
+		return cfg, fmt.Errorf("no POSTGRES_URL")
+	}
+	cfg.DbUrl = postgres.CreateDbUrl(cfg.DbBaseUrl, cfg.DbName)
+
+	if cfg.RabbitMQUrl == "" {
+		return cfg, fmt.Errorf("no RABBITMQ_URL")
+	}
+
+	return cfg, nil
+}
 
 func main() {
 	_ = godotenv.Load()
@@ -50,7 +84,7 @@ func run(logger *slog.Logger) error {
 		stop()
 	}()
 
-	cfg, err := config.Load()
+	cfg, err := loadConfig()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -93,12 +127,6 @@ func run(logger *slog.Logger) error {
 		Queries:      queries,
 	})
 
-	httpServer := server.NewServer(server.ServerDeps{
-		Logger:      logger,
-		SubsService: subsSvc,
-		Port:        "8080",
-	})
-
 	pub, err := rabbitmq.NewPublisher(rabbit)
 	if err != nil {
 		return fmt.Errorf("rabbit publisher: %w", err)
@@ -112,7 +140,7 @@ func run(logger *slog.Logger) error {
 			LeaseDuration:        60 * time.Second,
 			LoopIterationTimeout: 30 * time.Second,
 		},
-		Logger:  logger,
+		Logger:  logger.With("module", "outbox_dispatcher"),
 		Pub:     pub,
 		Queries: queries,
 	})
@@ -120,7 +148,20 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("outbox dispatcher: %w", err)
 	}
 
+	if !cfg.IsDev {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
 	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		srv := httpserver.NewServer(httpserver.ServerDeps{
+			Logger:  logger.With("module", "admin_server"),
+			Handler: admin.NewHandler(),
+			Port:    "9011",
+		})
+		srv.Start(ctx, cancel)
+	})
 
 	wg.Go(func() {
 		for {
@@ -138,12 +179,22 @@ func run(logger *slog.Logger) error {
 	})
 
 	wg.Go(func() {
-		httpServer.Start(ctx, cancel)
+		apiLogger := logger.With("module", "api_server")
+		apiHandler := api.NewHandler(api.HandlerDeps{
+			Logger:      apiLogger,
+			SubsService: subsSvc,
+		})
+		apiServer := httpserver.NewServer(httpserver.ServerDeps{
+			Logger:  apiLogger,
+			Handler: apiHandler,
+			Port:    "9010",
+		})
+		apiServer.Start(ctx, cancel)
 	})
 
 	logger.Info("all components initiated")
 
-	allDone := make(chan struct{}, 1)
+	allDone := make(chan struct{})
 	go func() {
 		wg.Wait()
 		close(allDone)

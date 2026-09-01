@@ -38,7 +38,7 @@ func NewConsumer(conn *amqp091.Connection, logger *slog.Logger) (*Consumer, erro
 	}
 
 	return &Consumer{
-		logger: logger.WithGroup("event-consumer"),
+		logger: logger,
 		ch:     ch,
 	}, nil
 }
