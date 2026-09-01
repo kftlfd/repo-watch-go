@@ -19,7 +19,12 @@ type EnvelopeJSON struct {
 const EventRepositoryChanged = "repository.changed"
 
 type EventRepositoryChangedPayload struct {
-	RepositoryID string `json:"repository_id"`
+	RepositoryID       string    `json:"repository_id"`
+	Owner              string    `json:"owner"`
+	Name               string    `json:"name"`
+	Active             bool      `json:"active"`
+	ActiveStateVersion int32     `json:"active_state_version"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 //
@@ -29,7 +34,13 @@ type EventRepositoryChangedPayload struct {
 const EventSubscriptionChanged = "subscription.changed"
 
 type EventSubscriptionChangedPayload struct {
-	SubscriptionID string `json:"subscription_id"`
+	SubscriptionID int32     `json:"subscription_id"`
+	Email          string    `json:"email"`
+	RepositoryID   string    `json:"repository_id"`
+	Active         bool      `json:"active"`
+	Version        int32     `json:"version"`
+	UnsubToken     string    `json:"unsub_token"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 //
@@ -51,5 +62,6 @@ const EventEmailQueued = "email.queued"
 
 type EventEmailQueuedPayload struct {
 	Recipient string `json:"recipient"`
-	Subject   string `json:"subject"`
+	Type      string `json:"type"`
+	Data      any    `json:"data"`
 }
