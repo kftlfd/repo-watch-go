@@ -16,9 +16,14 @@ type subsService interface {
 	GetSubscriptionsList(ctx context.Context, email string) ([]string, error)
 }
 
+type metrics interface {
+	HTTPRequest(method, path string, status int, duration time.Duration)
+}
+
 type HandlerDeps struct {
 	Logger      *slog.Logger
 	SubsService subsService
+	Metrics     metrics
 }
 
 type handler struct {
@@ -27,7 +32,7 @@ type handler struct {
 
 func NewHandler(d HandlerDeps) http.Handler {
 	g := gin.New()
-	g.Use(slogMiddleware(d.Logger))
+	g.Use(observabilityMiddleware(d.Logger, d.Metrics))
 	g.Use(gin.Recovery())
 
 	h := &handler{
@@ -39,7 +44,7 @@ func NewHandler(d HandlerDeps) http.Handler {
 	return g
 }
 
-func slogMiddleware(logger *slog.Logger) gin.HandlerFunc {
+func observabilityMiddleware(logger *slog.Logger, m metrics) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
@@ -47,12 +52,14 @@ func slogMiddleware(logger *slog.Logger) gin.HandlerFunc {
 
 		c.Next()
 
+		duration := time.Since(start)
+
 		attrs := []any{
 			slog.String("method", c.Request.Method),
 			slog.String("path", path),
 			slog.String("query", query),
 			slog.Int("status", c.Writer.Status()),
-			slog.Duration("latency", time.Since(start)),
+			slog.Duration("latency", duration),
 			// slog.String("client_ip", c.ClientIP()),
 			// slog.Int("body_size", c.Writer.Size()),
 		}
@@ -60,6 +67,8 @@ func slogMiddleware(logger *slog.Logger) gin.HandlerFunc {
 		if len(c.Errors) > 0 {
 			attrs = append(attrs, slog.Any("error", c.Errors.Errors()))
 		}
+
+		m.HTTPRequest(c.Request.Method, c.FullPath(), c.Writer.Status(), duration)
 
 		logger.Info("request", attrs...)
 	}

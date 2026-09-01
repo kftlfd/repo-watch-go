@@ -15,6 +15,7 @@ import (
 	"repo-watch/internal/subscription/api"
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/database/migrations"
+	"repo-watch/internal/subscription/metrics"
 	"repo-watch/internal/subscription/outbox"
 	"repo-watch/internal/subscription/subs"
 	"sync"
@@ -33,6 +34,11 @@ type Config struct {
 	DbName    string
 
 	RabbitMQUrl string
+
+	PortAPI   string
+	PortAdmin string
+
+	OutboxCfg outbox.Config
 }
 
 func loadConfig() (Config, error) {
@@ -43,6 +49,16 @@ func loadConfig() (Config, error) {
 		DbName:    "subscription_db",
 
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
+
+		PortAPI:   "9010",
+		PortAdmin: "9011",
+
+		OutboxCfg: outbox.Config{
+			BatchSize:            5,
+			LoopInterval:         10 * time.Second,
+			LeaseDuration:        60 * time.Second,
+			LoopIterationTimeout: 30 * time.Second,
+		},
 	}
 
 	if cfg.DbBaseUrl == "" {
@@ -135,12 +151,7 @@ func run(logger *slog.Logger) error {
 	defer pub.Close()
 
 	outboxDispatcher, err := outbox.NewDispatcher(outbox.Deps{
-		Cfg: outbox.Config{
-			BatchSize:            5,
-			LoopInterval:         10 * time.Second,
-			LeaseDuration:        60 * time.Second,
-			LoopIterationTimeout: 30 * time.Second,
-		},
+		Cfg:     cfg.OutboxCfg,
 		Logger:  logger,
 		Pub:     pub,
 		Queries: queries,
@@ -148,6 +159,9 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("outbox dispatcher: %w", err)
 	}
+
+	metricsReg := metrics.NewReistry()
+	metricsClient := metrics.NewClient(metricsReg)
 
 	if !cfg.IsDev {
 		gin.SetMode(gin.ReleaseMode)
@@ -158,8 +172,8 @@ func run(logger *slog.Logger) error {
 	wg.Go(func() {
 		srv := httpserver.NewServer(httpserver.ServerDeps{
 			Logger:  logger.With("module", "admin_server"),
-			Handler: admin.NewHandler(),
-			Port:    "9011",
+			Handler: admin.NewHandler(metricsReg),
+			Port:    cfg.PortAdmin,
 		})
 		srv.Start(ctx, cancel)
 	})
@@ -184,11 +198,12 @@ func run(logger *slog.Logger) error {
 		apiHandler := api.NewHandler(api.HandlerDeps{
 			Logger:      apiLogger,
 			SubsService: subsSvc,
+			Metrics:     metricsClient,
 		})
 		apiServer := httpserver.NewServer(httpserver.ServerDeps{
 			Logger:  apiLogger,
 			Handler: apiHandler,
-			Port:    "9010",
+			Port:    cfg.PortAPI,
 		})
 		apiServer.Start(ctx, cancel)
 	})
