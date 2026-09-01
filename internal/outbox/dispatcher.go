@@ -56,7 +56,7 @@ func NewDispatcher(d DispatcherDeps) (*Dispatcher, error) {
 	}
 	if d.Config.LoopIterationTimeout >= d.Config.LeaseDuration {
 		return nil, fmt.Errorf(
-			"loop iteration must be less then lease duration, got %v >= %v",
+			"loop iteration must be less than lease duration, got %v >= %v",
 			d.Config.LoopIterationTimeout, d.Config.LeaseDuration)
 	}
 	if d.GetEventID == nil {
