@@ -47,7 +47,7 @@ func NewHandler(d HandlerDeps) http.Handler {
 func observabilityMiddleware(logger *slog.Logger, m metrics) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
-		path := c.Request.URL.Path
+		path := c.FullPath()
 		query := c.Request.URL.RawQuery
 
 		c.Next()
