@@ -7,3 +7,10 @@ sql:
     gen:
       go:
         out: "internal/subscription/database"
+
+  - schema: "internal/scanner/database/migrations"
+    queries: "internal/scanner/database/queries"
+    engine: "postgresql"
+    gen:
+      go:
+        out: "internal/scanner/database"
