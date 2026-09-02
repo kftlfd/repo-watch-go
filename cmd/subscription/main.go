@@ -24,54 +24,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus"
 )
-
-type Config struct {
-	IsDev bool
-
-	DbBaseUrl string
-	DbUrl     string
-	DbName    string
-
-	RabbitMQUrl string
-
-	PortAPI   string
-	PortAdmin string
-
-	OutboxCfg outbox.Config
-}
-
-func loadConfig() (Config, error) {
-	cfg := Config{
-		IsDev: os.Getenv("ENV") == "dev",
-
-		DbBaseUrl: os.Getenv("POSTGRES_URL"),
-		DbName:    "subscription_db",
-
-		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
-
-		PortAPI:   "9010",
-		PortAdmin: "9011",
-
-		OutboxCfg: outbox.Config{
-			BatchSize:            5,
-			LoopInterval:         10 * time.Second,
-			LeaseDuration:        60 * time.Second,
-			LoopIterationTimeout: 30 * time.Second,
-		},
-	}
-
-	if cfg.DbBaseUrl == "" {
-		return cfg, fmt.Errorf("no POSTGRES_URL")
-	}
-	cfg.DbUrl = postgres.CreateDbUrl(cfg.DbBaseUrl, cfg.DbName)
-
-	if cfg.RabbitMQUrl == "" {
-		return cfg, fmt.Errorf("no RABBITMQ_URL")
-	}
-
-	return cfg, nil
-}
 
 func main() {
 	_ = godotenv.Load()
