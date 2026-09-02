@@ -19,12 +19,13 @@ type EnvelopeJSON struct {
 const EventRepositoryChanged = "repository.changed"
 
 type EventRepositoryChangedPayload struct {
-	RepositoryID       string    `json:"repository_id"`
-	Owner              string    `json:"owner"`
-	Name               string    `json:"name"`
-	Active             bool      `json:"active"`
-	ActiveStateVersion int32     `json:"active_state_version"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	RepositoryID  string    `json:"repository_id"`
+	Owner         string    `json:"owner"`
+	Name          string    `json:"name"`
+	LatestSeenTag string    `json:"latest_seen_tag"`
+	Active        bool      `json:"active"`
+	ActiveVersion int32     `json:"active_version"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 //
@@ -51,7 +52,9 @@ const EventReleaseDetected = "release.detected"
 
 type EventReleaseDetectedPayload struct {
 	RepositoryID string `json:"repository_id"`
-	ReleaseID    string `json:"release_id"`
+	Owner        string `json:"owner"`
+	Name         string `json:"name"`
+	Tag          string `json:"tag"`
 }
 
 //

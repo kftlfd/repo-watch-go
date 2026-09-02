@@ -216,12 +216,13 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		if err = saveToOutbox(ctx, qtx,
 			rabbitmq.EventRepositoryChanged,
 			rabbitmq.EventRepositoryChangedPayload{
-				RepositoryID:       updRepo.ID,
-				Owner:              updRepo.Owner,
-				Name:               updRepo.Name,
-				Active:             updRepo.ActiveSubscriptionsCount > 0,
-				ActiveStateVersion: updRepo.ActiveVersion,
-				UpdatedAt:          updRepo.UpdatedAt,
+				RepositoryID:  updRepo.ID,
+				Owner:         updRepo.Owner,
+				Name:          updRepo.Name,
+				LatestSeenTag: updRepo.InitTag,
+				Active:        updRepo.ActiveSubscriptionsCount > 0,
+				ActiveVersion: updRepo.ActiveVersion,
+				UpdatedAt:     updRepo.UpdatedAt,
 			},
 		); err != nil {
 			return err
@@ -308,12 +309,13 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		if err = saveToOutbox(ctx, qtx,
 			rabbitmq.EventRepositoryChanged,
 			rabbitmq.EventRepositoryChangedPayload{
-				RepositoryID:       updRepo.ID,
-				Owner:              updRepo.Owner,
-				Name:               updRepo.Name,
-				Active:             updRepo.ActiveSubscriptionsCount > 0,
-				ActiveStateVersion: updRepo.ActiveVersion,
-				UpdatedAt:          updRepo.UpdatedAt,
+				RepositoryID:  updRepo.ID,
+				Owner:         updRepo.Owner,
+				Name:          updRepo.Name,
+				LatestSeenTag: updRepo.InitTag,
+				Active:        updRepo.ActiveSubscriptionsCount > 0,
+				ActiveVersion: updRepo.ActiveVersion,
+				UpdatedAt:     updRepo.UpdatedAt,
 			},
 		); err != nil {
 			return err
