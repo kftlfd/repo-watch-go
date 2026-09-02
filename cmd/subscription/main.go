@@ -160,7 +160,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("outbox dispatcher: %w", err)
 	}
 
-	metricsReg := metrics.NewReistry()
+	metricsReg := prometheus.NewRegistry()
 	metricsClient := metrics.NewClient(metricsReg)
 
 	if !cfg.IsDev {

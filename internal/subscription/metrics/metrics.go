@@ -7,10 +7,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-func NewReistry() *prometheus.Registry {
-	return prometheus.NewRegistry()
-}
-
 type client struct {
 	httpRequests *prometheus.CounterVec
 	httpDuration *prometheus.HistogramVec
