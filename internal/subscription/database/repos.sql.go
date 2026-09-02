@@ -14,7 +14,11 @@ INSERT INTO repositories
     (id, owner, name, init_tag)
 VALUES
     ($1, $2, $3, $4)
-ON CONFLICT (id) DO NOTHING
+ON CONFLICT (id) DO UPDATE
+SET
+    init_tag = EXCLUDED.init_tag
+WHERE repositories.id = EXCLUDED.id
+    AND repositories.active_subscriptions_count < 1
 RETURNING id, owner, name, init_tag, active_subscriptions_count, active_version, created_at, updated_at
 `
 

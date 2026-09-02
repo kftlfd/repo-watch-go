@@ -3,7 +3,11 @@ INSERT INTO repositories
     (id, owner, name, init_tag)
 VALUES
     ($1, $2, $3, $4)
-ON CONFLICT (id) DO NOTHING
+ON CONFLICT (id) DO UPDATE
+SET
+    init_tag = EXCLUDED.init_tag
+WHERE repositories.id = EXCLUDED.id
+    AND repositories.active_subscriptions_count < 1
 RETURNING *;
 
 -- name: GetRepositoryByID :one
