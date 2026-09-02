@@ -14,3 +14,10 @@ sql:
     gen:
       go:
         out: "internal/scanner/database"
+
+  - schema: "internal/notification/database/migrations"
+    queries: "internal/notification/database/queries"
+    engine: "postgresql"
+    gen:
+      go:
+        out: "internal/notification/database"
