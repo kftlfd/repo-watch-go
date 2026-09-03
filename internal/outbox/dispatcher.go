@@ -95,12 +95,19 @@ func (d *Dispatcher) Start(ctx context.Context, cancelCtx context.CancelCauseFun
 
 func (d *Dispatcher) runLoop(ctx context.Context) error {
 	for {
-		if err := d.runIteration(ctx); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
+		n, err := d.runIteration(ctx)
+		if err != nil {
+			switch {
+			case errors.Is(err, context.Canceled):
+				return ctx.Err()
+			case errors.Is(err, context.DeadlineExceeded):
 				d.logger.Warn("iteration timeout")
-			} else if !errors.Is(err, context.Canceled) {
+			default:
 				return err
 			}
+		}
+		if n > 0 {
+			continue
 		}
 
 		select {
@@ -112,19 +119,20 @@ func (d *Dispatcher) runLoop(ctx context.Context) error {
 	}
 }
 
-func (d *Dispatcher) runIteration(ctx context.Context) error {
+func (d *Dispatcher) runIteration(ctx context.Context) (processed int, err error) {
 	ctx, cancel := context.WithTimeout(ctx, d.cfg.LoopIterationTimeout)
 	defer cancel()
 
 	batch, err := d.store.GetNextBatch(ctx, d.cfg.BatchSize, time.Now().Add(d.cfg.LeaseDuration))
 	if err != nil {
-		return fmt.Errorf("get next batch: %w", err)
+		return 0, fmt.Errorf("get next batch: %w", err)
 	}
 
 	if len(batch) < 1 {
-		return nil
+		return 0, nil
 	}
 
+	processed = len(batch)
 	publishedIDs := []int32{}
 	errs := []error{}
 
@@ -148,7 +156,7 @@ func (d *Dispatcher) runIteration(ctx context.Context) error {
 	}
 
 	if len(publishedIDs) < 1 {
-		return errors.Join(errs...)
+		return processed, errors.Join(errs...)
 	}
 
 	markCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -158,5 +166,5 @@ func (d *Dispatcher) runIteration(ctx context.Context) error {
 		errs = append(errs, fmt.Errorf("mark processed: %w", err))
 	}
 
-	return errors.Join(errs...)
+	return processed, errors.Join(errs...)
 }
