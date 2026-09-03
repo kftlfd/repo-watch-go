@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -27,7 +28,7 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	logger := logger.NewLogger()
+	logger := logger.NewLogger("service", "notification")
 
 	err := run(logger)
 
@@ -119,6 +120,10 @@ func run(logger *slog.Logger) error {
 	})
 	if err != nil {
 		return fmt.Errorf("outbox dispatcher: %w", err)
+	}
+
+	if !cfg.IsDev {
+		gin.SetMode(gin.ReleaseMode)
 	}
 
 	var wg sync.WaitGroup

@@ -20,6 +20,8 @@ type Config struct {
 	RabbitMQUrl string
 
 	OutboxCfg outbox.Config
+
+	GhApiUrl string
 }
 
 func loadConfig() (Config, error) {
@@ -35,10 +37,12 @@ func loadConfig() (Config, error) {
 
 		OutboxCfg: outbox.Config{
 			BatchSize:            5,
-			LoopInterval:         10 * time.Second,
-			LeaseDuration:        60 * time.Second,
-			LoopIterationTimeout: 30 * time.Second,
+			LoopInterval:         5 * time.Second,
+			LeaseDuration:        5 * time.Second,
+			LoopIterationTimeout: 3 * time.Second,
 		},
+
+		GhApiUrl: "",
 	}
 
 	if cfg.DbBaseUrl == "" {

@@ -21,6 +21,14 @@ type Config struct {
 
 	ScannerCfg worker.Config
 	OutboxCfg  outbox.Config
+
+	Concurrency ConcurrencyCfg
+
+	GhApiUrl string
+}
+
+type ConcurrencyCfg struct {
+	ScannerWorkers int
 }
 
 func loadConfig() (Config, error) {
@@ -34,18 +42,24 @@ func loadConfig() (Config, error) {
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
 
 		ScannerCfg: worker.Config{
-			BatchSize:        3,
-			Interval:         2 * time.Minute,
-			IterationTimeout: 30 * time.Second,
-			LeaseDuration:    60 * time.Second,
+			BatchSize:        5,
+			Interval:         10 * time.Second,
+			IterationTimeout: 10 * time.Second,
+			LeaseDuration:    20 * time.Second,
 		},
 
 		OutboxCfg: outbox.Config{
 			BatchSize:            5,
-			LoopInterval:         10 * time.Second,
-			LeaseDuration:        60 * time.Second,
-			LoopIterationTimeout: 30 * time.Second,
+			LoopInterval:         5 * time.Second,
+			LeaseDuration:        5 * time.Second,
+			LoopIterationTimeout: 3 * time.Second,
 		},
+
+		Concurrency: ConcurrencyCfg{
+			ScannerWorkers: 1,
+		},
+
+		GhApiUrl: "",
 	}
 
 	if cfg.DbBaseUrl == "" {

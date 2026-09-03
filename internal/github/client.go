@@ -48,6 +48,9 @@ func NewClient(opts ...clientOption) *githubClient {
 	for _, opt := range opts {
 		opt(c)
 	}
+	if c.baseURL == "" {
+		c.baseURL = defaultBaseURL
+	}
 	return c
 }
 

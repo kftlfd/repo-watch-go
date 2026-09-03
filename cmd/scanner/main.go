@@ -30,7 +30,7 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	logger := logger.NewLogger()
+	logger := logger.NewLogger("service", "scanner")
 
 	err := run(logger)
 
@@ -88,7 +88,7 @@ func run(logger *slog.Logger) error {
 
 	logger.Info("initiating components")
 
-	githubClient := github.NewClient()
+	githubClient := github.NewClient(github.WithBaseURL(cfg.GhApiUrl))
 
 	queries := database.New(db)
 
@@ -161,9 +161,11 @@ func run(logger *slog.Logger) error {
 		projectionWorker.Start(ctx)
 	})
 
-	wg.Go(func() {
-		scannerWorker.Start(ctx)
-	})
+	for range cfg.Concurrency.ScannerWorkers {
+		wg.Go(func() {
+			scannerWorker.Start(ctx)
+		})
+	}
 
 	logger.Info("all components initiated")
 

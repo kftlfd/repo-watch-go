@@ -30,7 +30,7 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	logger := logger.NewLogger()
+	logger := logger.NewLogger("service", "subscription")
 
 	err := run(logger)
 
@@ -88,7 +88,7 @@ func run(logger *slog.Logger) error {
 
 	logger.Info("initiating components")
 
-	githubClient := github.NewClient()
+	githubClient := github.NewClient(github.WithBaseURL(cfg.GhApiUrl))
 
 	queries := database.New(db)
 
