@@ -32,15 +32,21 @@ func (s *scannerOutbox) GetNextBatch(ctx context.Context, batchSize int32, lease
 
 	out := make([]outbox.Row, len(res))
 	for i, row := range res {
-		payload, err := json.Marshal(rabbitmq.EventEmailQueuedPayload{
+		emailData, err := json.Marshal(emails.EmailNewReleaseNotificationPayload{
+			RepoID:     row.RepositoryID,
+			Owner:      row.Owner,
+			Name:       row.Name,
+			Tag:        row.Tag,
+			UnsubToken: row.UnsubToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		eventPayload, err := json.Marshal(rabbitmq.EventEmailQueuedPayload{
 			Recipient: row.Email,
 			Type:      emails.EmailNewReleaseNotification,
-			Data: emails.EmailNewReleaseNotificationPayload{
-				RepoID: row.RepositoryID,
-				Owner:  row.Owner,
-				Name:   row.Name,
-				Tag:    row.Tag,
-			},
+			Data:      emailData,
 		})
 		if err != nil {
 			return nil, err
@@ -50,7 +56,7 @@ func (s *scannerOutbox) GetNextBatch(ctx context.Context, batchSize int32, lease
 			ID:        row.ID,
 			EventType: rabbitmq.EventEmailQueued,
 			CreatedAt: row.CreatedAt,
-			Payload:   payload,
+			Payload:   eventPayload,
 		}
 	}
 
@@ -62,7 +68,7 @@ func (s *scannerOutbox) MarkPublished(ctx context.Context, ids []int32) error {
 }
 
 var validEventTypes = []string{
-	rabbitmq.EventReleaseDetected,
+	rabbitmq.EventEmailQueued,
 }
 
 type Config outbox.DispatcherConfig

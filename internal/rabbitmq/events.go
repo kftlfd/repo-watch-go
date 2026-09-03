@@ -64,7 +64,7 @@ type EventReleaseDetectedPayload struct {
 const EventEmailQueued = "email.queued"
 
 type EventEmailQueuedPayload struct {
-	Recipient string `json:"recipient"`
-	Type      string `json:"type"`
-	Data      any    `json:"data"`
+	Recipient string          `json:"recipient"`
+	Type      string          `json:"type"`
+	Data      json.RawMessage `json:"data"`
 }

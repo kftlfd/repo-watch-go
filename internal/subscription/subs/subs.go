@@ -119,15 +119,20 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return err
 	}
 
+	emailData, err := json.Marshal(emails.EmailConfirmSubscriptionData{
+		RepoID:       repoInfo.repoId,
+		ConfirmToken: tokenVal,
+	})
+	if err != nil {
+		return err
+	}
+
 	if err = saveToOutbox(ctx, qtx,
 		rabbitmq.EventEmailQueued,
 		rabbitmq.EventEmailQueuedPayload{
 			Recipient: emailInfo.email,
 			Type:      emails.EmailConfirmSubscription,
-			Data: emails.EmailConfirmSubscriptionData{
-				RepoID:       repoInfo.repoId,
-				ConfirmToken: tokenVal,
-			},
+			Data:      emailData,
 		},
 	); err != nil {
 		return err
@@ -229,14 +234,19 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		}
 	}
 
+	emailData, err := json.Marshal(emails.EmailSubscribedData{
+		RepoID: updRepo.ID,
+	})
+	if err != nil {
+		return err
+	}
+
 	if err = saveToOutbox(ctx, qtx,
 		rabbitmq.EventEmailQueued,
 		rabbitmq.EventEmailQueuedPayload{
 			Recipient: updSub.Email,
 			Type:      emails.EmailSubscribed,
-			Data: emails.EmailSubscribedData{
-				RepoID: updRepo.ID,
-			},
+			Data:      emailData,
 		},
 	); err != nil {
 		return err
@@ -322,14 +332,19 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		}
 	}
 
+	emailData, err := json.Marshal(emails.EmailUnsubscribedData{
+		RepoID: updRepo.ID,
+	})
+	if err != nil {
+		return err
+	}
+
 	if err = saveToOutbox(ctx, qtx,
 		rabbitmq.EventEmailQueued,
 		rabbitmq.EventEmailQueuedPayload{
 			Recipient: updSub.Email,
 			Type:      emails.EmailUnsubscribed,
-			Data: emails.EmailUnsubscribedData{
-				RepoID: updRepo.ID,
-			},
+			Data:      emailData,
 		},
 	); err != nil {
 		return err
