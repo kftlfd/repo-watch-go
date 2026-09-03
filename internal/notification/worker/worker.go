@@ -40,7 +40,7 @@ func (w *notificationsWorker) Start(ctx context.Context) {
 	w.logger.Info("starting")
 
 	w.consumer.ConsumeJSON(ctx,
-		rabbitmq.GetQueueName(rabbitmq.EventRepositoryChanged),
+		rabbitmq.GetQueueName(rabbitmq.EventReleaseDetected),
 		func(
 			_ context.Context,
 			msg rabbitmq.EnvelopeJSON,
