@@ -41,8 +41,6 @@ func (m *mailerWorker) Start(ctx context.Context) {
 	m.consumer.ConsumeJSON(ctx,
 		rabbitmq.GetQueueName(rabbitmq.EventEmailQueued),
 		func(_ context.Context, msg rabbitmq.EnvelopeJSON, _ rabbitmq.EventMeta) (rabbitmq.AckType, error) {
-			m.logger.Info("new event", "id", msg.EventID, "type", msg.EventType)
-
 			if msg.EventType != rabbitmq.EventEmailQueued {
 				return rabbitmq.NackDiscard, fmt.Errorf(
 					"unexpected event type %q, expected %q", msg.EventType, rabbitmq.EventEmailQueued,
