@@ -75,16 +75,28 @@ func (c *Consumer) ConsumeJSON(
 	}
 
 	for delivery := range deliveries {
-		ack, err := handleJsonMsg(ctx, delivery, handler)
+		logArgs := []any{
+			slog.String("queue", queueName),
+			slog.String("routing_key", delivery.RoutingKey),
+			slog.String("message_id", delivery.MessageId),
+		}
 
-		if ack != Ack {
-			c.logger.Error("handler nack",
-				"error", err,
-				"queue", queueName,
-				"routing_key", delivery.RoutingKey,
-				"message_id", delivery.MessageId,
+		meta := EventMeta{RoutingKey: delivery.RoutingKey}
+		var msg EnvelopeJSON
+
+		ack, ok, err := handleJsonMsg(ctx, delivery.Body, &msg, meta, handler)
+		if ok {
+			logArgs = append(logArgs,
+				slog.String("event_id", msg.EventID),
+				slog.String("event_type", msg.EventType),
 			)
 		}
+		logArgs = append(logArgs, slog.String("status", string(ack)))
+		if err != nil {
+			logArgs = append(logArgs, slog.Any("error", err))
+		}
+
+		c.logger.Debug("new event", logArgs...)
 
 		switch ack {
 		case Ack:
@@ -111,11 +123,17 @@ func (c *Consumer) ConsumeJSON(
 	return nil
 }
 
-func handleJsonMsg(ctx context.Context, delivery amqp091.Delivery, handler JSONEventHandler) (AckType, error) {
-	var msg EnvelopeJSON
-	if err := json.Unmarshal(delivery.Body, &msg); err != nil {
-		return NackDiscard, fmt.Errorf("invalid json envelope: %w", err)
+func handleJsonMsg(
+	ctx context.Context,
+	deliveryBody []byte,
+	msg *EnvelopeJSON,
+	meta EventMeta,
+	handler JSONEventHandler,
+) (ack AckType, ok bool, err error) {
+	if err := json.Unmarshal(deliveryBody, msg); err != nil {
+		return NackDiscard, false, fmt.Errorf("invalid json envelope: %w", err)
 	}
 
-	return handler(ctx, msg, EventMeta{RoutingKey: delivery.RoutingKey})
+	ack, err = handler(ctx, *msg, meta)
+	return ack, true, err
 }

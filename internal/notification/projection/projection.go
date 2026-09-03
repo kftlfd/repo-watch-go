@@ -46,8 +46,6 @@ func (w *projectionWorker) Start(ctx context.Context) {
 			msg rabbitmq.EnvelopeJSON,
 			_ rabbitmq.EventMeta,
 		) (rabbitmq.AckType, error) {
-			w.logger.Info("new event")
-
 			if msg.EventType != rabbitmq.EventSubscriptionChanged {
 				return rabbitmq.NackDiscard, fmt.Errorf(
 					"unexpected event type %q, expected %q", msg.EventType, rabbitmq.EventSubscriptionChanged,

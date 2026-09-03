@@ -46,8 +46,6 @@ func (w *notificationsWorker) Start(ctx context.Context) {
 			msg rabbitmq.EnvelopeJSON,
 			_ rabbitmq.EventMeta,
 		) (rabbitmq.AckType, error) {
-			w.logger.Info("new event")
-
 			if msg.EventType != rabbitmq.EventReleaseDetected {
 				return rabbitmq.NackDiscard, fmt.Errorf(
 					"unexpected event type %q, expected %q", msg.EventType, rabbitmq.EventReleaseDetected,
