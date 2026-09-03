@@ -22,8 +22,9 @@ type EmailUnsubscribedData struct {
 const EmailNewReleaseNotification = "new-release"
 
 type EmailNewReleaseNotificationPayload struct {
-	RepoID string `json:"repo_id"`
-	Owner  string `json:"owner"`
-	Name   string `json:"name"`
-	Tag    string `json:"tag"`
+	RepoID     string `json:"repo_id"`
+	Owner      string `json:"owner"`
+	Name       string `json:"name"`
+	Tag        string `json:"tag"`
+	UnsubToken string `json:"unsub_token"`
 }

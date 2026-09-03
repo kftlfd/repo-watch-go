@@ -13,9 +13,9 @@ WHERE subscriptions.active_version < EXCLUDED.active_version;
 
 -- name: CreateNewReleaseOutboxNotifications :exec
 INSERT INTO outbox
-    (email, repository_id, owner, name, tag)
+    (email, repository_id, owner, name, tag, unsub_token)
 SELECT
-    subscriptions.email, subscriptions.repository_id, $2, $3, $4
+    subscriptions.email, subscriptions.repository_id, $2, $3, $4, subscriptions.unsub_token
 FROM subscriptions
 WHERE subscriptions.repository_id = $1
     AND subscriptions.active = true

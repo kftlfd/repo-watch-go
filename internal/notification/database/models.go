@@ -16,6 +16,7 @@ type Outbox struct {
 	Owner        string
 	Name         string
 	Tag          string
+	UnsubToken   string
 	CreatedAt    time.Time
 	LeasedUntil  sql.NullTime
 	PublishedAt  sql.NullTime

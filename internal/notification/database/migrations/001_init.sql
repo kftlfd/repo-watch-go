@@ -18,6 +18,7 @@ CREATE TABLE outbox (
     owner TEXT NOT NULL,
     name TEXT NOT NULL,
     tag TEXT NOT NULL,
+    unsub_token TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     leased_until TIMESTAMPTZ,
     published_at TIMESTAMPTZ,

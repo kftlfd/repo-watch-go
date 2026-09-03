@@ -14,9 +14,9 @@ import (
 
 const createNewReleaseOutboxNotifications = `-- name: CreateNewReleaseOutboxNotifications :exec
 INSERT INTO outbox
-    (email, repository_id, owner, name, tag)
+    (email, repository_id, owner, name, tag, unsub_token)
 SELECT
-    subscriptions.email, subscriptions.repository_id, $2, $3, $4
+    subscriptions.email, subscriptions.repository_id, $2, $3, $4, subscriptions.unsub_token
 FROM subscriptions
 WHERE subscriptions.repository_id = $1
     AND subscriptions.active = true
@@ -87,7 +87,7 @@ UPDATE outbox
 SET leased_until = $2
 FROM candidates
 WHERE outbox.id = candidates.id
-RETURNING outbox.id, outbox.email, outbox.repository_id, outbox.owner, outbox.name, outbox.tag, outbox.created_at, outbox.leased_until, outbox.published_at
+RETURNING outbox.id, outbox.email, outbox.repository_id, outbox.owner, outbox.name, outbox.tag, outbox.unsub_token, outbox.created_at, outbox.leased_until, outbox.published_at
 `
 
 type GetNotificationsBatchParams struct {
@@ -111,6 +111,7 @@ func (q *Queries) GetNotificationsBatch(ctx context.Context, arg GetNotification
 			&i.Owner,
 			&i.Name,
 			&i.Tag,
+			&i.UnsubToken,
 			&i.CreatedAt,
 			&i.LeasedUntil,
 			&i.PublishedAt,
