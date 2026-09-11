@@ -59,7 +59,7 @@ func loadConfig() (Config, error) {
 			ScannerWorkers: 1,
 		},
 
-		GhApiUrl: "",
+		GhApiUrl: os.Getenv("GH_API_URL"),
 	}
 
 	if cfg.DbBaseUrl == "" {

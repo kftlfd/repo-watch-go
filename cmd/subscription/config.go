@@ -42,7 +42,7 @@ func loadConfig() (Config, error) {
 			LoopIterationTimeout: 3 * time.Second,
 		},
 
-		GhApiUrl: "",
+		GhApiUrl: os.Getenv("GH_API_URL"),
 	}
 
 	if cfg.DbBaseUrl == "" {
