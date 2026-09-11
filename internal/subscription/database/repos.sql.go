@@ -132,3 +132,18 @@ func (q *Queries) IncrementRepositoryActiveCount(ctx context.Context, id string)
 	)
 	return i, err
 }
+
+const markRepositoryRemoved = `-- name: MarkRepositoryRemoved :exec
+UPDATE repositories
+SET
+    active_subscriptions_count = 0,
+    active_version = active_version + 1,
+    updated_at = now()
+WHERE id = $1
+    AND active_subscriptions_count > 0
+`
+
+func (q *Queries) MarkRepositoryRemoved(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, markRepositoryRemoved, id)
+	return err
+}

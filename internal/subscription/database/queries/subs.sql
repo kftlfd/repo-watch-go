@@ -49,3 +49,19 @@ FROM subscriptions
 WHERE subscriptions.email = $1
     AND subscriptions.active = true
 ORDER BY subscriptions.created_at ASC;
+
+-- name: DeactivateSubsForRepoAndRemoveTokens :exec
+WITH removed_subs as (
+    UPDATE subscriptions
+    SET
+        active = false,
+        active_version = active_version + 1,
+        updated_at = now()
+    WHERE repository_id = $1
+        AND active = true
+    RETURNING id
+)
+DELETE FROM tokens
+WHERE subscription_id IN (
+    SELECT id FROM removed_subs
+);

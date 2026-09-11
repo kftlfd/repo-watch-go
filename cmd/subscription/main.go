@@ -15,6 +15,7 @@ import (
 	"repo-watch/internal/subscription/api"
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/database/migrations"
+	"repo-watch/internal/subscription/inbox"
 	"repo-watch/internal/subscription/metrics"
 	"repo-watch/internal/subscription/outbox"
 	"repo-watch/internal/subscription/subs"
@@ -114,6 +115,13 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("outbox dispatcher: %w", err)
 	}
 
+	inboxWorker, err := inbox.NewInboxWorker(inbox.Deps{
+		Logger:  logger,
+		DB:      db,
+		Rabbit:  rabbit,
+		Queries: queries,
+	})
+
 	metricsReg := prometheus.NewRegistry()
 	metricsClient := metrics.NewClient(metricsReg)
 
@@ -145,6 +153,10 @@ func run(logger *slog.Logger) error {
 
 	wg.Go(func() {
 		outboxDispatcher.Start(ctx, cancel)
+	})
+
+	wg.Go(func() {
+		inboxWorker.Start(ctx)
 	})
 
 	wg.Go(func() {

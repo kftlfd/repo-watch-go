@@ -41,3 +41,12 @@ SET
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: MarkRepositoryRemoved :exec
+UPDATE repositories
+SET
+    active_subscriptions_count = 0,
+    active_version = active_version + 1,
+    updated_at = now()
+WHERE id = $1
+    AND active_subscriptions_count > 0;
