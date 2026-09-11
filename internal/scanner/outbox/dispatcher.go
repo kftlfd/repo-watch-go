@@ -47,6 +47,7 @@ func (s *scannerOutbox) MarkPublished(ctx context.Context, ids []int32) error {
 
 var validEventTypes = []string{
 	rabbitmq.EventReleaseDetected,
+	rabbitmq.EventRepositoryRemoved,
 }
 
 type Config outbox.DispatcherConfig

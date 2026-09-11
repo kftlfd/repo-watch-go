@@ -34,6 +34,14 @@ FROM candidates
 WHERE repositories.id = candidates.id
 RETURNING repositories.*;
 
+-- name: MarkRepoInactive :exec
+UPDATE repositories
+SET
+    active = false,
+    active_version = 0,
+    updated_at = now()
+WHERE id = $1;
+
 -- name: MarkRepoProcessed :exec
 UPDATE repositories
 SET

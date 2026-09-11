@@ -36,6 +36,8 @@ const EventRepositoryRemoved = "repository.removed"
 
 type EventRepositoryRemovedPayload struct {
 	RepositoryID string `json:"repository_id"`
+	Owner        string `json:"owner"`
+	Name         string `json:"name"`
 }
 
 //

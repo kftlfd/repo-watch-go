@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"repo-watch/internal/github"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/database"
 	"time"
@@ -97,6 +99,13 @@ func (w *scannerWorker) DoScanIteration() error {
 		latestTag, err := w.gh.GetLatestReleaseTag(ctx, repo.Owner, repo.Name)
 		if err != nil {
 			w.logger.Info("repo scan", "repo", repo.ID, "status", "gh error", "err", err)
+
+			if errors.Is(err, github.ErrNotFound) {
+				if err := w.removeRepo(repo.ID); err != nil {
+					return err
+				}
+			}
+
 			continue
 		}
 
@@ -159,6 +168,38 @@ func (w *scannerWorker) updateRepo(repo database.Repository, latestTag string) e
 		if err != nil {
 			return fmt.Errorf("insert into outbox: %w", err)
 		}
+	}
+
+	tx.Commit()
+	return nil
+}
+
+func (w *scannerWorker) removeRepo(repoID string) error {
+	tx, err := w.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	ctx := context.Background()
+	qtx := w.q.WithTx(tx)
+
+	payload, err := json.Marshal(
+		rabbitmq.EventRepositoryRemovedPayload{
+			RepositoryID: repoID,
+		})
+	if err != nil {
+		return fmt.Errorf("marshal outbox payload json: %w", err)
+	}
+
+	qtx.MarkRepoInactive(ctx, repoID)
+
+	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
+		EventType: rabbitmq.EventRepositoryRemoved,
+		Payload:   payload,
+	})
+	if err != nil {
+		return fmt.Errorf("insert into outbox: %w", err)
 	}
 
 	tx.Commit()
