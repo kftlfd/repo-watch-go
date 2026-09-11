@@ -14,9 +14,9 @@ import (
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/database"
 	"repo-watch/internal/scanner/database/migrations"
+	"repo-watch/internal/scanner/inbox"
 	"repo-watch/internal/scanner/metrics"
 	"repo-watch/internal/scanner/outbox"
-	"repo-watch/internal/scanner/projection"
 	"repo-watch/internal/scanner/worker"
 	"sync"
 	"syscall"
@@ -95,7 +95,7 @@ func run(logger *slog.Logger) error {
 	metricsReg := prometheus.NewRegistry()
 	metricsClient := metrics.NewClient(metricsReg)
 
-	projectionWorker, err := projection.NewProjectionWorker(projection.Deps{
+	inboxWorker, err := inbox.NewInboxWorker(inbox.Deps{
 		Logger:  logger,
 		Rabbit:  rabbit,
 		Queries: queries,
@@ -158,7 +158,7 @@ func run(logger *slog.Logger) error {
 	})
 
 	wg.Go(func() {
-		projectionWorker.Start(ctx)
+		inboxWorker.Start(ctx)
 	})
 
 	for range cfg.Concurrency.ScannerWorkers {

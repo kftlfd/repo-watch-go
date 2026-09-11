@@ -37,31 +37,28 @@ func NewMailer(d Deps) (*mailerWorker, error) {
 
 func (m *mailerWorker) Start(ctx context.Context) {
 	m.logger.Info("starting")
+	m.consumer.ConsumeJSON(ctx, rabbitmq.QueueMailerInbox, m.handler)
+}
 
-	m.consumer.ConsumeJSON(ctx,
-		rabbitmq.GetQueueName(rabbitmq.EventEmailQueued),
-		func(_ context.Context, msg rabbitmq.EnvelopeJSON, _ rabbitmq.EventMeta) (rabbitmq.AckType, error) {
-			if msg.EventType != rabbitmq.EventEmailQueued {
-				return rabbitmq.NackDiscard, fmt.Errorf(
-					"unexpected event type %q, expected %q", msg.EventType, rabbitmq.EventEmailQueued,
-				)
-			}
+func (m *mailerWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, error) {
+	switch msg.EventType {
 
-			var ev rabbitmq.EventEmailQueuedPayload
-			if err := json.Unmarshal(msg.Payload, &ev); err != nil {
-				return rabbitmq.NackDiscard, fmt.Errorf("invalid JSON payload: %w", err)
-			}
+	case rabbitmq.EventEmailQueued:
+		var ev rabbitmq.EventEmailQueuedPayload
+		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
+			return rabbitmq.NackDiscard, fmt.Errorf("invalid JSON payload: %w", err)
+		}
+		email, err := renderEmail(ev)
+		if err != nil {
+			return rabbitmq.NackDiscard, err
+		}
+		printEmail(ev.Recipient, email)
+		return rabbitmq.Ack, nil
 
-			email, err := renderEmail(ev)
-			if err != nil {
-				return rabbitmq.NackDiscard, err
-			}
+	default:
+		return rabbitmq.NackDiscard, fmt.Errorf("unexpected event type %q", msg.EventType)
 
-			printEmail(ev.Recipient, email)
-
-			return rabbitmq.Ack, nil
-		},
-	)
+	}
 }
 
 type Email struct {

@@ -11,9 +11,8 @@ import (
 	"repo-watch/internal/logger"
 	"repo-watch/internal/notification/database"
 	"repo-watch/internal/notification/database/migrations"
+	"repo-watch/internal/notification/inbox"
 	"repo-watch/internal/notification/outbox"
-	"repo-watch/internal/notification/projection"
-	"repo-watch/internal/notification/worker"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"sync"
@@ -88,13 +87,13 @@ func run(logger *slog.Logger) error {
 
 	queries := database.New(db)
 
-	projectionWorker, err := projection.NewProjectionWorker(projection.Deps{
+	inboxWorker, err := inbox.NewInboxWorker(inbox.Deps{
 		Logger:  logger,
 		Rabbit:  rabbit,
 		Queries: queries,
 	})
 	if err != nil {
-		return fmt.Errorf("create projection worker: %w", err)
+		return fmt.Errorf("create inbox worker: %w", err)
 	}
 
 	pub, err := rabbitmq.NewPublisher(rabbit)
@@ -102,15 +101,6 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("rabbit publisher: %w", err)
 	}
 	defer pub.Close()
-
-	notificationsWorker, err := worker.NewNotificationsWorker(worker.Deps{
-		Logger:  logger,
-		Rabbit:  rabbit,
-		Queries: queries,
-	})
-	if err != nil {
-		return fmt.Errorf("create notifications worker: %w", err)
-	}
 
 	outboxDispatcher, err := outbox.NewDispatcher(outbox.Deps{
 		Cfg:     cfg.OutboxCfg,
@@ -153,11 +143,7 @@ func run(logger *slog.Logger) error {
 	})
 
 	wg.Go(func() {
-		projectionWorker.Start(ctx)
-	})
-
-	wg.Go(func() {
-		notificationsWorker.Start(ctx)
+		inboxWorker.Start(ctx)
 	})
 
 	logger.Info("all components initiated")
