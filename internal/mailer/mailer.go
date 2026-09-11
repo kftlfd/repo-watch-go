@@ -110,6 +110,16 @@ func renderEmail(payload rabbitmq.EventEmailQueuedPayload) (Email, error) {
 			body:    fmt.Sprintf("You will not be notified about new releases of %v", data.RepoID),
 		}, nil
 
+	case emails.EmailRepositoryRemoved:
+		var data emails.EmailRepositoryRemovedPayload
+		if err := json.Unmarshal(payload.Data, &data); err != nil {
+			return Email{}, ErrInvalidPayloadData
+		}
+		return Email{
+			subject: fmt.Sprintf("Repository was removed: %v", data.RepoID),
+			body:    fmt.Sprintf("Repo was deleted by owner. You will not receive any further notifications for %q", data.RepoID),
+		}, nil
+
 	default:
 		return Email{}, fmt.Errorf("unexpected email type: %q", payload.Type)
 	}

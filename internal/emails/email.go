@@ -28,3 +28,9 @@ type EmailNewReleaseNotificationPayload struct {
 	Tag        string `json:"tag"`
 	UnsubToken string `json:"unsub_token"`
 }
+
+const EmailRepositoryRemoved = "repo-removed"
+
+type EmailRepositoryRemovedPayload struct {
+	RepoID string `json:"repo_id"`
+}
