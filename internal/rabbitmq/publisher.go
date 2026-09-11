@@ -58,7 +58,7 @@ func (p *Publisher) PublishJSON(
 		return fmt.Errorf("json marshal: %w", err)
 	}
 
-	routingKey := GetQueueName(msg.EventType)
+	routingKey := msg.EventType
 
 	publishing := amqp091.Publishing{
 		ContentType:  "application/json",
@@ -69,7 +69,7 @@ func (p *Publisher) PublishJSON(
 
 	confirmation, err := p.ch.PublishWithDeferredConfirmWithContext(
 		ctx,
-		exchangeDefault,
+		ExchangeTopic,
 		routingKey,
 		true,  // mandatory
 		false, // immediate

@@ -47,13 +47,9 @@ func (c *Consumer) Close() error {
 	return c.ch.Close()
 }
 
-type EventMeta struct {
-	RoutingKey string
-}
-
 // if returning Ack: err must be nil
 // for Nack types: err must be non-nil
-type JSONEventHandler func(ctx context.Context, msg EnvelopeJSON, meta EventMeta) (AckType, error)
+type JSONEventHandler func(msg EnvelopeJSON) (AckType, error)
 
 func (c *Consumer) ConsumeJSON(
 	ctx context.Context,
@@ -81,10 +77,9 @@ func (c *Consumer) ConsumeJSON(
 			slog.String("message_id", delivery.MessageId),
 		}
 
-		meta := EventMeta{RoutingKey: delivery.RoutingKey}
 		var msg EnvelopeJSON
 
-		ack, ok, err := handleJsonMsg(ctx, delivery.Body, &msg, meta, handler)
+		ack, ok, err := handleJsonMsg(delivery.Body, &msg, handler)
 		if ok {
 			logArgs = append(logArgs,
 				slog.String("event_id", msg.EventID),
@@ -124,16 +119,14 @@ func (c *Consumer) ConsumeJSON(
 }
 
 func handleJsonMsg(
-	ctx context.Context,
 	deliveryBody []byte,
 	msg *EnvelopeJSON,
-	meta EventMeta,
 	handler JSONEventHandler,
 ) (ack AckType, ok bool, err error) {
 	if err := json.Unmarshal(deliveryBody, msg); err != nil {
 		return NackDiscard, false, fmt.Errorf("invalid json envelope: %w", err)
 	}
 
-	ack, err = handler(ctx, *msg, meta)
+	ack, err = handler(*msg)
 	return ack, true, err
 }

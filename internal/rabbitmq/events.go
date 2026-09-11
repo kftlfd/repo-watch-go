@@ -29,6 +29,16 @@ type EventRepositoryChangedPayload struct {
 }
 
 //
+// repository-removed
+//
+
+const EventRepositoryRemoved = "repository.removed"
+
+type EventRepositoryRemovedPayload struct {
+	RepositoryID string `json:"repository_id"`
+}
+
+//
 // subscription-changed
 //
 
