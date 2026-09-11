@@ -13,12 +13,12 @@ CREATE TABLE subscriptions (
 
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
+    type TEXT NOT NULL,
     email TEXT NOT NULL,
     repository_id TEXT NOT NULL,
-    owner TEXT NOT NULL,
-    name TEXT NOT NULL,
     tag TEXT NOT NULL,
     unsub_token TEXT NOT NULL,
+    payload JSONB NOT NULL,    
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     leased_until TIMESTAMPTZ,
     published_at TIMESTAMPTZ,

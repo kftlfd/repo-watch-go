@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"repo-watch/internal/notification/database"
+	"repo-watch/internal/notification/outbox"
 	"repo-watch/internal/rabbitmq"
 
 	"github.com/rabbitmq/amqp091-go"
@@ -65,13 +66,37 @@ func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, erro
 		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}
+		payload, err := json.Marshal(outbox.NewReleasePayload{
+			Owner: ev.Owner,
+			Name:  ev.Name,
+		})
+		if err != nil {
+			return rabbitmq.NackRequeue, fmt.Errorf("marshal payload: %w", err)
+		}
 		if err := w.q.CreateNewReleaseOutboxNotifications(context.Background(), database.CreateNewReleaseOutboxNotificationsParams{
 			RepositoryID: ev.RepositoryID,
-			Owner:        ev.Owner,
-			Name:         ev.Name,
 			Tag:          ev.Tag,
+			Payload:      payload,
 		}); err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("create notifications: %w", err)
+		}
+		return rabbitmq.Ack, nil
+
+	case rabbitmq.EventRepositoryRemoved:
+		var ev rabbitmq.EventRepositoryRemovedPayload
+		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
+			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
+		}
+		payload, err := json.Marshal(outbox.RepoRemovedPayload{})
+		if err != nil {
+			return rabbitmq.NackRequeue, fmt.Errorf("marshal payload: %w", err)
+		}
+		if err := w.q.DeactivateSubsForRepoAndNotifySubs(context.Background(), database.DeactivateSubsForRepoAndNotifySubsParams{
+			RepositoryID: ev.RepositoryID,
+			Tag:          "repo_removed:" + msg.EventID,
+			Payload:      payload,
+		}); err != nil {
+			return rabbitmq.NackRequeue, fmt.Errorf("deactivate repo: %w", err)
 		}
 		return rabbitmq.Ack, nil
 

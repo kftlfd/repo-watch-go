@@ -8,15 +8,16 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 
 	"github.com/lib/pq"
 )
 
 const createNewReleaseOutboxNotifications = `-- name: CreateNewReleaseOutboxNotifications :exec
 INSERT INTO outbox
-    (email, repository_id, owner, name, tag, unsub_token)
+    (type, email, repository_id, tag, unsub_token, payload)
 SELECT
-    subscriptions.email, subscriptions.repository_id, $2, $3, $4, subscriptions.unsub_token
+    'new_release', subscriptions.email, subscriptions.repository_id, $2, subscriptions.unsub_token, $3
 FROM subscriptions
 WHERE subscriptions.repository_id = $1
     AND subscriptions.active = true
@@ -25,18 +26,12 @@ ON CONFLICT (email, repository_id, tag) DO NOTHING
 
 type CreateNewReleaseOutboxNotificationsParams struct {
 	RepositoryID string
-	Owner        string
-	Name         string
 	Tag          string
+	Payload      json.RawMessage
 }
 
 func (q *Queries) CreateNewReleaseOutboxNotifications(ctx context.Context, arg CreateNewReleaseOutboxNotificationsParams) error {
-	_, err := q.db.ExecContext(ctx, createNewReleaseOutboxNotifications,
-		arg.RepositoryID,
-		arg.Owner,
-		arg.Name,
-		arg.Tag,
-	)
+	_, err := q.db.ExecContext(ctx, createNewReleaseOutboxNotifications, arg.RepositoryID, arg.Tag, arg.Payload)
 	return err
 }
 
@@ -73,6 +68,35 @@ func (q *Queries) CreateOrUpdateSubscription(ctx context.Context, arg CreateOrUp
 	return err
 }
 
+const deactivateSubsForRepoAndNotifySubs = `-- name: DeactivateSubsForRepoAndNotifySubs :exec
+WITH subs AS (
+    UPDATE subscriptions
+    SET
+        active = false,
+        unsub_token = '',
+        updated_at = now()
+    WHERE repository_id = $1
+        AND active = true
+    RETURNING email, unsub_token
+)
+INSERT INTO outbox
+    (type, email, repository_id, tag, unsub_token, payload)
+SELECT
+    'repo_removed', subs.email, $1, $2, subs.unsub_token, $3
+FROM subs
+`
+
+type DeactivateSubsForRepoAndNotifySubsParams struct {
+	RepositoryID string
+	Tag          string
+	Payload      json.RawMessage
+}
+
+func (q *Queries) DeactivateSubsForRepoAndNotifySubs(ctx context.Context, arg DeactivateSubsForRepoAndNotifySubsParams) error {
+	_, err := q.db.ExecContext(ctx, deactivateSubsForRepoAndNotifySubs, arg.RepositoryID, arg.Tag, arg.Payload)
+	return err
+}
+
 const getNotificationsBatch = `-- name: GetNotificationsBatch :many
 WITH candidates AS (
     SELECT id
@@ -87,7 +111,7 @@ UPDATE outbox
 SET leased_until = $2
 FROM candidates
 WHERE outbox.id = candidates.id
-RETURNING outbox.id, outbox.email, outbox.repository_id, outbox.owner, outbox.name, outbox.tag, outbox.unsub_token, outbox.created_at, outbox.leased_until, outbox.published_at
+RETURNING outbox.id, outbox.type, outbox.email, outbox.repository_id, outbox.tag, outbox.unsub_token, outbox.payload, outbox.created_at, outbox.leased_until, outbox.published_at
 `
 
 type GetNotificationsBatchParams struct {
@@ -106,12 +130,12 @@ func (q *Queries) GetNotificationsBatch(ctx context.Context, arg GetNotification
 		var i Outbox
 		if err := rows.Scan(
 			&i.ID,
+			&i.Type,
 			&i.Email,
 			&i.RepositoryID,
-			&i.Owner,
-			&i.Name,
 			&i.Tag,
 			&i.UnsubToken,
+			&i.Payload,
 			&i.CreatedAt,
 			&i.LeasedUntil,
 			&i.PublishedAt,

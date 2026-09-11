@@ -6,17 +6,18 @@ package database
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
 type Outbox struct {
 	ID           int32
+	Type         string
 	Email        string
 	RepositoryID string
-	Owner        string
-	Name         string
 	Tag          string
 	UnsubToken   string
+	Payload      json.RawMessage
 	CreatedAt    time.Time
 	LeasedUntil  sql.NullTime
 	PublishedAt  sql.NullTime

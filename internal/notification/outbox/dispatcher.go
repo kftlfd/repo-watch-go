@@ -14,6 +14,13 @@ import (
 	"time"
 )
 
+type NewReleasePayload struct {
+	Owner string `json:"owner"`
+	Name  string `json:"name"`
+}
+
+type RepoRemovedPayload struct{}
+
 type scannerOutbox struct {
 	q *database.Queries
 }
@@ -32,32 +39,74 @@ func (s *scannerOutbox) GetNextBatch(ctx context.Context, batchSize int32, lease
 
 	out := make([]outbox.Row, len(res))
 	for i, row := range res {
-		emailData, err := json.Marshal(emails.EmailNewReleaseNotificationPayload{
-			RepoID:     row.RepositoryID,
-			Owner:      row.Owner,
-			Name:       row.Name,
-			Tag:        row.Tag,
-			UnsubToken: row.UnsubToken,
-		})
-		if err != nil {
-			return nil, err
+		switch row.Type {
+
+		case "new_release":
+			var data NewReleasePayload
+			if err := json.Unmarshal(row.Payload, &data); err != nil {
+				return nil, fmt.Errorf("invalid payload: %w", err)
+			}
+
+			emailData, err := json.Marshal(emails.EmailNewReleaseNotificationPayload{
+				RepoID:     row.RepositoryID,
+				Owner:      data.Owner,
+				Name:       data.Name,
+				Tag:        row.Tag,
+				UnsubToken: row.UnsubToken,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			eventPayload, err := json.Marshal(rabbitmq.EventEmailQueuedPayload{
+				Recipient: row.Email,
+				Type:      emails.EmailNewReleaseNotification,
+				Data:      emailData,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = outbox.Row{
+				ID:        row.ID,
+				EventType: rabbitmq.EventEmailQueued,
+				CreatedAt: row.CreatedAt,
+				Payload:   eventPayload,
+			}
+
+		case "repo_removed":
+			var data RepoRemovedPayload
+			if err := json.Unmarshal(row.Payload, &data); err != nil {
+				return nil, fmt.Errorf("invalid payload: %w", err)
+			}
+
+			emailData, err := json.Marshal(emails.EmailRepositoryRemovedPayload{
+				RepoID: row.RepositoryID,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			eventPayload, err := json.Marshal(rabbitmq.EventEmailQueuedPayload{
+				Recipient: row.Email,
+				Type:      emails.EmailNewReleaseNotification,
+				Data:      emailData,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = outbox.Row{
+				ID:        row.ID,
+				EventType: rabbitmq.EventEmailQueued,
+				CreatedAt: row.CreatedAt,
+				Payload:   eventPayload,
+			}
+
+		default:
+			return nil, fmt.Errorf("unexpected outbox event type: %q", row.Type)
 		}
 
-		eventPayload, err := json.Marshal(rabbitmq.EventEmailQueuedPayload{
-			Recipient: row.Email,
-			Type:      emails.EmailNewReleaseNotification,
-			Data:      emailData,
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		out[i] = outbox.Row{
-			ID:        row.ID,
-			EventType: rabbitmq.EventEmailQueued,
-			CreatedAt: row.CreatedAt,
-			Payload:   eventPayload,
-		}
 	}
 
 	return out, nil

@@ -13,9 +13,9 @@ WHERE subscriptions.active_version < EXCLUDED.active_version;
 
 -- name: CreateNewReleaseOutboxNotifications :exec
 INSERT INTO outbox
-    (email, repository_id, owner, name, tag, unsub_token)
+    (type, email, repository_id, tag, unsub_token, payload)
 SELECT
-    subscriptions.email, subscriptions.repository_id, $2, $3, $4, subscriptions.unsub_token
+    'new_release', subscriptions.email, subscriptions.repository_id, $2, subscriptions.unsub_token, $3
 FROM subscriptions
 WHERE subscriptions.repository_id = $1
     AND subscriptions.active = true
@@ -43,3 +43,20 @@ SET published_at = now(),
     leased_until = NULL
 WHERE id = ANY(@ids::int[])
     AND published_at IS NULL;
+
+-- name: DeactivateSubsForRepoAndNotifySubs :exec
+WITH subs AS (
+    UPDATE subscriptions
+    SET
+        active = false,
+        unsub_token = '',
+        updated_at = now()
+    WHERE repository_id = $1
+        AND active = true
+    RETURNING email, unsub_token
+)
+INSERT INTO outbox
+    (type, email, repository_id, tag, unsub_token, payload)
+SELECT
+    'repo_removed', subs.email, $1, $2, subs.unsub_token, $3
+FROM subs;
