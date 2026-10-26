@@ -1,0 +1,20 @@
+info:
+  name: List subscriptions
+  type: http
+  seq: 2
+
+http:
+  method: GET
+  url: "{{URL}}/api/subscriptions?email=me@test.com"
+  params:
+    - name: email
+      value: me@test.com
+      type: query
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true

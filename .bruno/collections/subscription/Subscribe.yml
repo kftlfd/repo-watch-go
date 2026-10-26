@@ -1,0 +1,23 @@
+info:
+  name: Subscribe
+  type: http
+  seq: 4
+
+http:
+  method: POST
+  url: "{{URL}}/api/subscribe"
+  body:
+    type: form-urlencoded
+    data:
+      - name: email
+        value: me2@test.com
+      - name: repo
+        value: torvalds/linux
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true

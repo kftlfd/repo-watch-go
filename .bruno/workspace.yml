@@ -1,0 +1,12 @@
+opencollection: 1.0.0
+info:
+  name: "repo-watch"
+  type: workspace
+
+collections:
+  - name: "subscription"
+    path: "collections/subscription"
+
+specs:
+
+docs: ''

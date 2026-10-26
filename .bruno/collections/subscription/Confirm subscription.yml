@@ -1,0 +1,20 @@
+info:
+  name: Confirm subscription
+  type: http
+  seq: 5
+
+http:
+  method: POST
+  url: "{{URL}}/api/confirm/:token"
+  params:
+    - name: token
+      value: tN23rfGXQXEULLWmvzn0UQ
+      type: path
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
