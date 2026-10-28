@@ -4,7 +4,7 @@ services:
     ports:
       - 5432:5432
     volumes:
-      - .data/postgres:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -21,4 +21,8 @@ services:
       - 15672:15672
       - 61613:61613
     volumes:
-      - .data/rabbitmq:/var/lib/rabbitmq
+      - rabbitmq-data:/var/lib/rabbitmq
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
