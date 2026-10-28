@@ -22,6 +22,8 @@ type Metrics interface {
 	ScanErr()
 }
 
+const persistenceTimeout = 5 * time.Second
+
 type Config struct {
 	BatchSize        int32
 	Interval         time.Duration
@@ -78,6 +80,14 @@ func (w *scannerWorker) Start(ctx context.Context) {
 	}
 }
 
+// persistenceContext detaches from the iteration deadline. The GitHub call
+// must respect the iteration budget, but once it succeeds the result should
+// still be stored even if the iteration deadline expires while the request is
+// finishing (or shortly after). The independent timeout keeps shutdown bounded.
+func persistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), persistenceTimeout)
+}
+
 func (w *scannerWorker) DoScanIteration() error {
 	w.logger.Info("new iteration")
 
@@ -101,7 +111,10 @@ func (w *scannerWorker) DoScanIteration() error {
 			w.logger.Info("repo scan", "repo", repo.ID, "status", "gh error", "err", err)
 
 			if errors.Is(err, github.ErrNotFound) {
-				if err := w.removeRepo(repo.ID); err != nil {
+				writeCtx, cancel := persistenceContext(ctx)
+				err := w.removeRepo(writeCtx, repo.ID)
+				cancel()
+				if err != nil {
 					return err
 				}
 			}
@@ -115,7 +128,9 @@ func (w *scannerWorker) DoScanIteration() error {
 			w.logger.Info("repo scan", "repo", repo.ID, "status", "not changed")
 		}
 
-		err = w.updateRepo(repo, latestTag)
+		writeCtx, cancel := persistenceContext(ctx)
+		err = w.updateRepo(writeCtx, repo, latestTag)
+		cancel()
 		if err != nil {
 			return fmt.Errorf("update error: %w", err)
 		}
@@ -126,20 +141,21 @@ func (w *scannerWorker) DoScanIteration() error {
 	return nil
 }
 
-func (w *scannerWorker) updateRepo(repo database.Repository, latestTag string) error {
-	tx, err := w.db.Begin()
+func (w *scannerWorker) updateRepo(ctx context.Context, repo database.Repository, latestTag string) error {
+	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	ctx := context.Background()
 	qtx := w.q.WithTx(tx)
 
-	qtx.MarkRepoProcessed(ctx, database.MarkRepoProcessedParams{
+	if err := qtx.MarkRepoProcessed(ctx, database.MarkRepoProcessedParams{
 		ID:            repo.ID,
 		LatestSeenTag: latestTag,
-	})
+	}); err != nil {
+		return fmt.Errorf("mark repo processed: %w", err)
+	}
 
 	if repo.LatestSeenTag != latestTag {
 		_, err := qtx.CreateRelease(ctx, database.CreateReleaseParams{
@@ -170,18 +186,20 @@ func (w *scannerWorker) updateRepo(repo database.Repository, latestTag string) e
 		}
 	}
 
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit repo update: %w", err)
+	}
+
 	return nil
 }
 
-func (w *scannerWorker) removeRepo(repoID string) error {
-	tx, err := w.db.Begin()
+func (w *scannerWorker) removeRepo(ctx context.Context, repoID string) error {
+	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	ctx := context.Background()
 	qtx := w.q.WithTx(tx)
 
 	payload, err := json.Marshal(
@@ -192,7 +210,9 @@ func (w *scannerWorker) removeRepo(repoID string) error {
 		return fmt.Errorf("marshal outbox payload json: %w", err)
 	}
 
-	qtx.MarkRepoInactive(ctx, repoID)
+	if err := qtx.MarkRepoInactive(ctx, repoID); err != nil {
+		return fmt.Errorf("mark repo inactive: %w", err)
+	}
 
 	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
 		EventType: rabbitmq.EventRepositoryRemoved,
@@ -202,6 +222,9 @@ func (w *scannerWorker) removeRepo(repoID string) error {
 		return fmt.Errorf("insert into outbox: %w", err)
 	}
 
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit repo removal: %w", err)
+	}
+
 	return nil
 }
