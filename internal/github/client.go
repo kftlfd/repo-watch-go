@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,6 +20,31 @@ var (
 )
 
 const defaultBaseURL = "https://api.github.com"
+
+// RateLimitError describes a GitHub rate-limit response. It wraps ErrRateLimit
+// so callers can either use errors.Is for classification or errors.As to read
+// the retry hint.
+type RateLimitError struct {
+	StatusCode int
+	RetryAfter time.Duration
+	ResetAt    time.Time
+}
+
+func (e *RateLimitError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("github rate limit (status %d, retry after %s)",
+			e.StatusCode, e.RetryAfter.Round(time.Second))
+	}
+	if !e.ResetAt.IsZero() {
+		return fmt.Sprintf("github rate limit (status %d, reset at %s)",
+			e.StatusCode, e.ResetAt.UTC().Format(time.RFC3339))
+	}
+	return fmt.Sprintf("github rate limit (status %d)", e.StatusCode)
+}
+
+func (e *RateLimitError) Unwrap() error {
+	return ErrRateLimit
+}
 
 type githubClient struct {
 	baseURL string
@@ -75,19 +103,7 @@ func (c *githubClient) httpGet(ctx context.Context, reqUrl string, respData any)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode >= http.StatusInternalServerError {
-			return ErrTransientError
-		}
-
-		if resp.StatusCode == http.StatusTooManyRequests {
-			return ErrRateLimit
-		}
-
-		if resp.StatusCode == http.StatusNotFound {
-			return ErrNotFound
-		}
-
-		return fmt.Errorf("github returned status %d", resp.StatusCode)
+		return classifyHTTPError(resp)
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(respData); err != nil {
@@ -95,6 +111,82 @@ func (c *githubClient) httpGet(ctx context.Context, reqUrl string, respData any)
 	}
 
 	return nil
+}
+
+func classifyHTTPError(resp *http.Response) error {
+	switch resp.StatusCode {
+	case http.StatusNotFound:
+		return ErrNotFound
+
+	case http.StatusTooManyRequests:
+		return newRateLimitError(resp)
+
+	case http.StatusForbidden:
+		if isRateLimitResponse(resp) {
+			return newRateLimitError(resp)
+		}
+		return fmt.Errorf("github returned status %d", resp.StatusCode)
+
+	default:
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return fmt.Errorf("%w: status %d", ErrTransientError, resp.StatusCode)
+		}
+		return fmt.Errorf("github returned status %d", resp.StatusCode)
+	}
+}
+
+// isRateLimitResponse recognizes both primary and secondary rate limits. GitHub
+// reports primary limits with X-RateLimit-Remaining: 0 and secondary limits
+// with 403, sometimes only with a message in the body.
+func isRateLimitResponse(resp *http.Response) bool {
+	if resp.Header.Get("Retry-After") != "" {
+		return true
+	}
+	if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+		return true
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return false
+	}
+
+	var payload struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+
+	return strings.Contains(strings.ToLower(payload.Message), "rate limit")
+}
+
+func newRateLimitError(resp *http.Response) *RateLimitError {
+	retryErr := &RateLimitError{StatusCode: resp.StatusCode}
+	now := time.Now()
+
+	if value := resp.Header.Get("Retry-After"); value != "" {
+		if seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil {
+			retryErr.RetryAfter = time.Duration(seconds) * time.Second
+		} else if retryAt, err := http.ParseTime(value); err == nil {
+			retryErr.RetryAfter = retryAt.Sub(now)
+		}
+	}
+
+	if value := resp.Header.Get("X-RateLimit-Reset"); value != "" {
+		if seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil {
+			retryErr.ResetAt = time.Unix(seconds, 0)
+			if retryErr.RetryAfter <= 0 {
+				retryErr.RetryAfter = retryErr.ResetAt.Sub(now)
+			}
+		}
+	}
+
+	if retryErr.RetryAfter < 0 {
+		retryErr.RetryAfter = 0
+	}
+
+	return retryErr
 }
 
 func (c *githubClient) getLatestRelease(ctx context.Context, owner, repo string) (string, error) {

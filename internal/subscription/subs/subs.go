@@ -209,7 +209,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 			RepositoryID:   updRepo.ID,
 			Email:          updSub.Email,
 			Active:         updSub.Active,
-			Version:        updRepo.ActiveVersion,
+			Version:        updSub.ActiveVersion,
 			UnsubToken:     unsubToken.TokenVal,
 			UpdatedAt:      updSub.UpdatedAt,
 		},

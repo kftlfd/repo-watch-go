@@ -3,12 +3,15 @@ package subs_test
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"repo-watch/internal/github"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/database/migrations"
 	"repo-watch/internal/subscription/subs"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -114,4 +117,50 @@ func TestCreateSubscription(t *testing.T) {
 	evCnt, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventEmailQueued)
 	require.NoError(t, err)
 	require.True(t, evCnt == 1)
+}
+
+func TestCreateSubscriptionMapsGithubErrors(t *testing.T) {
+	db := newTestDB(t)
+
+	ctx := context.Background()
+
+	tests := []struct {
+		name  string
+		ghErr error
+		want  error
+	}{
+		{
+			name:  "rate limit",
+			ghErr: github.ErrRateLimit,
+			want:  subs.ErrRateLimit,
+		},
+		{
+			name:  "wrapped rate limit",
+			ghErr: &github.RateLimitError{StatusCode: 403, RetryAfter: time.Minute},
+			want:  subs.ErrRateLimit,
+		},
+		{
+			name:  "transient",
+			ghErr: github.ErrTransientError,
+			want:  subs.ErrUpstreamError,
+		},
+		{
+			name:  "unexpected",
+			ghErr: errors.New("boom"),
+			want:  subs.ErrUpstreamError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := subs.NewService(subs.Deps{
+				GithubClient: &fakeGitHub{err: tt.ghErr},
+				DB:           db.DB,
+				Queries:      db.Queries,
+			})
+
+			err := svc.CreateSubscription(ctx, "alice@example.com", "owner/repository")
+			require.ErrorIs(t, err, tt.want)
+		})
+	}
 }

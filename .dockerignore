@@ -1,0 +1,11 @@
+.env
+.env.*
+
+.git
+.gitignore
+
+.bruno
+*.md
+*.log
+Dockerfile
+docker-compose*.yml

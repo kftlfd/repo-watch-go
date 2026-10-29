@@ -28,6 +28,7 @@ type HandlerDeps struct {
 
 type handler struct {
 	subsService subsService
+	logger      *slog.Logger
 }
 
 func NewHandler(d HandlerDeps) http.Handler {
@@ -37,6 +38,7 @@ func NewHandler(d HandlerDeps) http.Handler {
 
 	h := &handler{
 		subsService: d.SubsService,
+		logger:      d.Logger,
 	}
 
 	registerApiRoutes(g.Group("/api"), h)
@@ -76,7 +78,12 @@ func observabilityMiddleware(logger *slog.Logger, m metrics) gin.HandlerFunc {
 
 func registerApiRoutes(rg *gin.RouterGroup, h *handler) {
 	rg.POST("/subscribe", h.handleCreateSubscription)
+
 	rg.POST("/confirm/:token", h.handleConfirmSubscription)
+	rg.GET("/confirm/:token", h.handleConfirmSubscription)
+
 	rg.POST("/unsubscribe/:token", h.handleDeactivateSubscription)
+	rg.GET("/unsubscribe/:token", h.handleDeactivateSubscription)
+
 	rg.GET("/subscriptions", h.handleListSubscriptions)
 }

@@ -22,11 +22,22 @@ type Metrics interface {
 	ScanErr()
 }
 
+const (
+	persistenceTimeout = 5 * time.Second
+
+	defaultGithubMaxAttempts = 3
+	defaultGithubRetryBase   = 500 * time.Millisecond
+	maxGithubRetryDelay      = 5 * time.Second
+)
+
 type Config struct {
 	BatchSize        int32
 	Interval         time.Duration
 	IterationTimeout time.Duration
 	LeaseDuration    time.Duration
+
+	GithubMaxAttempts int
+	GithubRetryBase   time.Duration
 }
 
 type Deps struct {
@@ -78,6 +89,85 @@ func (w *scannerWorker) Start(ctx context.Context) {
 	}
 }
 
+// persistenceContext detaches from the iteration deadline. The GitHub call
+// must respect the iteration budget, but once it succeeds the result should
+// still be stored even if the iteration deadline expires while the request is
+// finishing (or shortly after). The independent timeout keeps shutdown bounded.
+func persistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), persistenceTimeout)
+}
+
+// fetchLatestTag retries transient GitHub failures and rate limits that come
+// with a usable retry hint. Rate limits without a hint are not retried inline:
+// the repo stays leased and is picked up again after the lease expires.
+func (w *scannerWorker) fetchLatestTag(ctx context.Context, repo database.Repository) (string, error) {
+	attempts := w.cfg.GithubMaxAttempts
+	if attempts < 1 {
+		attempts = defaultGithubMaxAttempts
+	}
+
+	backoff := w.cfg.GithubRetryBase
+	if backoff <= 0 {
+		backoff = defaultGithubRetryBase
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		tag, err := w.gh.GetLatestReleaseTag(ctx, repo.Owner, repo.Name)
+		if err == nil {
+			return tag, nil
+		}
+		lastErr = err
+
+		wait, retry := githubRetryDelay(err, backoff)
+		if !retry || attempt == attempts {
+			break
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
+			break
+		}
+		if !sleepContext(ctx, wait) {
+			break
+		}
+
+		backoff *= 2
+		if backoff > maxGithubRetryDelay {
+			backoff = maxGithubRetryDelay
+		}
+	}
+
+	return "", lastErr
+}
+
+func githubRetryDelay(err error, backoff time.Duration) (time.Duration, bool) {
+	var rateErr *github.RateLimitError
+	if errors.As(err, &rateErr) {
+		// Without a retry hint, retrying inline would be a tight loop.
+		if rateErr.RetryAfter <= 0 {
+			return 0, false
+		}
+		return rateErr.RetryAfter, true
+	}
+
+	if errors.Is(err, github.ErrTransientError) {
+		return backoff, true
+	}
+
+	return 0, false
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 func (w *scannerWorker) DoScanIteration() error {
 	w.logger.Info("new iteration")
 
@@ -96,14 +186,25 @@ func (w *scannerWorker) DoScanIteration() error {
 	}
 
 	for _, repo := range batch {
-		latestTag, err := w.gh.GetLatestReleaseTag(ctx, repo.Owner, repo.Name)
+		latestTag, err := w.fetchLatestTag(ctx, repo)
 		if err != nil {
 			w.logger.Info("repo scan", "repo", repo.ID, "status", "gh error", "err", err)
 
 			if errors.Is(err, github.ErrNotFound) {
-				if err := w.removeRepo(repo.ID); err != nil {
+				writeCtx, cancel := persistenceContext(ctx)
+				err := w.removeRepo(writeCtx, repo.ID)
+				cancel()
+				if err != nil {
 					return err
 				}
+				continue
+			}
+
+			// A rate limit applies to the whole client, so stop this batch
+			// instead of immediately requesting every remaining repo.
+			if errors.Is(err, github.ErrRateLimit) {
+				w.logger.Info("stopping batch after github rate limit")
+				break
 			}
 
 			continue
@@ -115,7 +216,9 @@ func (w *scannerWorker) DoScanIteration() error {
 			w.logger.Info("repo scan", "repo", repo.ID, "status", "not changed")
 		}
 
-		err = w.updateRepo(repo, latestTag)
+		writeCtx, cancel := persistenceContext(ctx)
+		err = w.updateRepo(writeCtx, repo, latestTag)
+		cancel()
 		if err != nil {
 			return fmt.Errorf("update error: %w", err)
 		}
@@ -126,20 +229,21 @@ func (w *scannerWorker) DoScanIteration() error {
 	return nil
 }
 
-func (w *scannerWorker) updateRepo(repo database.Repository, latestTag string) error {
-	tx, err := w.db.Begin()
+func (w *scannerWorker) updateRepo(ctx context.Context, repo database.Repository, latestTag string) error {
+	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	ctx := context.Background()
 	qtx := w.q.WithTx(tx)
 
-	qtx.MarkRepoProcessed(ctx, database.MarkRepoProcessedParams{
+	if err := qtx.MarkRepoProcessed(ctx, database.MarkRepoProcessedParams{
 		ID:            repo.ID,
 		LatestSeenTag: latestTag,
-	})
+	}); err != nil {
+		return fmt.Errorf("mark repo processed: %w", err)
+	}
 
 	if repo.LatestSeenTag != latestTag {
 		_, err := qtx.CreateRelease(ctx, database.CreateReleaseParams{
@@ -170,18 +274,20 @@ func (w *scannerWorker) updateRepo(repo database.Repository, latestTag string) e
 		}
 	}
 
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit repo update: %w", err)
+	}
+
 	return nil
 }
 
-func (w *scannerWorker) removeRepo(repoID string) error {
-	tx, err := w.db.Begin()
+func (w *scannerWorker) removeRepo(ctx context.Context, repoID string) error {
+	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	ctx := context.Background()
 	qtx := w.q.WithTx(tx)
 
 	payload, err := json.Marshal(
@@ -192,7 +298,9 @@ func (w *scannerWorker) removeRepo(repoID string) error {
 		return fmt.Errorf("marshal outbox payload json: %w", err)
 	}
 
-	qtx.MarkRepoInactive(ctx, repoID)
+	if err := qtx.MarkRepoInactive(ctx, repoID); err != nil {
+		return fmt.Errorf("mark repo inactive: %w", err)
+	}
 
 	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
 		EventType: rabbitmq.EventRepositoryRemoved,
@@ -202,6 +310,9 @@ func (w *scannerWorker) removeRepo(repoID string) error {
 		return fmt.Errorf("insert into outbox: %w", err)
 	}
 
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit repo removal: %w", err)
+	}
+
 	return nil
 }
