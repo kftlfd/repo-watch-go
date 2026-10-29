@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -72,6 +73,12 @@ func (f *fakeGithub) GetLatestReleaseTag(context.Context, string, string) (strin
 	return f.tag, f.err
 }
 
+type funcGithub func(ctx context.Context, owner, repo string) (string, error)
+
+func (f funcGithub) GetLatestReleaseTag(ctx context.Context, owner, repo string) (string, error) {
+	return f(ctx, owner, repo)
+}
+
 // blockingGithub waits for the iteration deadline, then returns a result. This
 // simulates an API call that completes just as the iteration budget runs out.
 type blockingGithub struct {
@@ -115,6 +122,9 @@ func testConfig() Config {
 		Interval:         time.Second,
 		IterationTimeout: 5 * time.Second,
 		LeaseDuration:    30 * time.Second,
+
+		GithubMaxAttempts: 3,
+		GithubRetryBase:   10 * time.Millisecond,
 	}
 }
 
@@ -361,5 +371,150 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, eventCount)
+	})
+}
+
+func TestScannerWorkerGithubRetries(t *testing.T) {
+	db := newScannerTestDB(t)
+
+	ctx := context.Background()
+	repoID := "owner/repository"
+
+	t.Run("transient error is retried and processed", func(t *testing.T) {
+		resetScannerDB(t, ctx, db.DB)
+		insertRepo(t, ctx, db.Queries, repoID, "v1.0.0")
+
+		calls := 0
+		gh := funcGithub(func(context.Context, string, string) (string, error) {
+			calls++
+			if calls == 1 {
+				return "", fmt.Errorf("%w: status 502", github.ErrTransientError)
+			}
+			return "v2.0.0", nil
+		})
+		w, metrics := newTestWorker(db.DB, db.Queries, gh, testConfig())
+
+		require.NoError(t, w.DoScanIteration())
+		require.Equal(t, 2, calls)
+		require.Equal(t, 1, metrics.ok)
+
+		tag, active := getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v2.0.0", tag)
+		require.True(t, active)
+
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, eventCount)
+	})
+
+	t.Run("rate limit with retry hint is retried", func(t *testing.T) {
+		resetScannerDB(t, ctx, db.DB)
+		insertRepo(t, ctx, db.Queries, repoID, "v1.0.0")
+
+		calls := 0
+		gh := funcGithub(func(context.Context, string, string) (string, error) {
+			calls++
+			if calls == 1 {
+				return "", &github.RateLimitError{
+					StatusCode: 429,
+					RetryAfter: 10 * time.Millisecond,
+				}
+			}
+			return "v2.0.0", nil
+		})
+		w, metrics := newTestWorker(db.DB, db.Queries, gh, testConfig())
+
+		require.NoError(t, w.DoScanIteration())
+		require.Equal(t, 2, calls)
+		require.Equal(t, 1, metrics.ok)
+
+		tag, active := getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v2.0.0", tag)
+		require.True(t, active)
+	})
+
+	t.Run("rate limit without hint leaves repo for lease expiry", func(t *testing.T) {
+		resetScannerDB(t, ctx, db.DB)
+		insertRepo(t, ctx, db.Queries, repoID, "v1.0.0")
+
+		calls := 0
+		gh := funcGithub(func(context.Context, string, string) (string, error) {
+			calls++
+			return "", &github.RateLimitError{StatusCode: 403}
+		})
+		w, metrics := newTestWorker(db.DB, db.Queries, gh, testConfig())
+
+		require.NoError(t, w.DoScanIteration())
+		require.Equal(t, 1, calls)
+		require.Zero(t, metrics.ok)
+
+		tag, active := getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v1.0.0", tag)
+		require.True(t, active)
+
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		require.NoError(t, err)
+		require.Zero(t, eventCount)
+
+		// The repo lease is still active, so an immediate second iteration must
+		// not call GitHub again.
+		require.NoError(t, w.DoScanIteration())
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("rate limit stops the rest of the batch", func(t *testing.T) {
+		resetScannerDB(t, ctx, db.DB)
+		insertRepo(t, ctx, db.Queries, "owner/first", "v1.0.0")
+		insertRepo(t, ctx, db.Queries, "owner/second", "v1.0.0")
+
+		_, err := db.DB.ExecContext(
+			ctx,
+			`UPDATE repositories SET last_checked_at = now() - interval '1 hour' WHERE id = 'owner/first'`,
+		)
+		require.NoError(t, err)
+
+		calls := 0
+		gh := funcGithub(func(context.Context, string, string) (string, error) {
+			calls++
+			return "", &github.RateLimitError{StatusCode: 429}
+		})
+		w, _ := newTestWorker(db.DB, db.Queries, gh, testConfig())
+
+		require.NoError(t, w.DoScanIteration())
+		require.Equal(t, 1, calls)
+
+		for _, id := range []string{"owner/first", "owner/second"} {
+			tag, active := getRepoState(t, ctx, db.DB, id)
+			require.Equal(t, "v1.0.0", tag)
+			require.True(t, active)
+		}
+
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		require.NoError(t, err)
+		require.Zero(t, eventCount)
+	})
+
+	t.Run("exhausted transient errors do not mark the repo processed", func(t *testing.T) {
+		resetScannerDB(t, ctx, db.DB)
+		insertRepo(t, ctx, db.Queries, repoID, "v1.0.0")
+
+		calls := 0
+		gh := funcGithub(func(context.Context, string, string) (string, error) {
+			calls++
+			return "", fmt.Errorf("%w: status 503", github.ErrTransientError)
+		})
+		w, metrics := newTestWorker(db.DB, db.Queries, gh, testConfig())
+
+		require.NoError(t, w.DoScanIteration())
+		require.Equal(t, 3, calls)
+		require.Zero(t, metrics.ok)
+
+		tag, active := getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v1.0.0", tag)
+		require.True(t, active)
+
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		require.NoError(t, err)
+		require.Zero(t, eventCount)
 	})
 }

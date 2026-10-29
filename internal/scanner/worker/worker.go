@@ -22,13 +22,22 @@ type Metrics interface {
 	ScanErr()
 }
 
-const persistenceTimeout = 5 * time.Second
+const (
+	persistenceTimeout = 5 * time.Second
+
+	defaultGithubMaxAttempts = 3
+	defaultGithubRetryBase   = 500 * time.Millisecond
+	maxGithubRetryDelay      = 5 * time.Second
+)
 
 type Config struct {
 	BatchSize        int32
 	Interval         time.Duration
 	IterationTimeout time.Duration
 	LeaseDuration    time.Duration
+
+	GithubMaxAttempts int
+	GithubRetryBase   time.Duration
 }
 
 type Deps struct {
@@ -88,6 +97,77 @@ func persistenceContext(ctx context.Context) (context.Context, context.CancelFun
 	return context.WithTimeout(context.WithoutCancel(ctx), persistenceTimeout)
 }
 
+// fetchLatestTag retries transient GitHub failures and rate limits that come
+// with a usable retry hint. Rate limits without a hint are not retried inline:
+// the repo stays leased and is picked up again after the lease expires.
+func (w *scannerWorker) fetchLatestTag(ctx context.Context, repo database.Repository) (string, error) {
+	attempts := w.cfg.GithubMaxAttempts
+	if attempts < 1 {
+		attempts = defaultGithubMaxAttempts
+	}
+
+	backoff := w.cfg.GithubRetryBase
+	if backoff <= 0 {
+		backoff = defaultGithubRetryBase
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		tag, err := w.gh.GetLatestReleaseTag(ctx, repo.Owner, repo.Name)
+		if err == nil {
+			return tag, nil
+		}
+		lastErr = err
+
+		wait, retry := githubRetryDelay(err, backoff)
+		if !retry || attempt == attempts {
+			break
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
+			break
+		}
+		if !sleepContext(ctx, wait) {
+			break
+		}
+
+		backoff *= 2
+		if backoff > maxGithubRetryDelay {
+			backoff = maxGithubRetryDelay
+		}
+	}
+
+	return "", lastErr
+}
+
+func githubRetryDelay(err error, backoff time.Duration) (time.Duration, bool) {
+	var rateErr *github.RateLimitError
+	if errors.As(err, &rateErr) {
+		// Without a retry hint, retrying inline would be a tight loop.
+		if rateErr.RetryAfter <= 0 {
+			return 0, false
+		}
+		return rateErr.RetryAfter, true
+	}
+
+	if errors.Is(err, github.ErrTransientError) {
+		return backoff, true
+	}
+
+	return 0, false
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 func (w *scannerWorker) DoScanIteration() error {
 	w.logger.Info("new iteration")
 
@@ -106,7 +186,7 @@ func (w *scannerWorker) DoScanIteration() error {
 	}
 
 	for _, repo := range batch {
-		latestTag, err := w.gh.GetLatestReleaseTag(ctx, repo.Owner, repo.Name)
+		latestTag, err := w.fetchLatestTag(ctx, repo)
 		if err != nil {
 			w.logger.Info("repo scan", "repo", repo.ID, "status", "gh error", "err", err)
 
@@ -117,6 +197,14 @@ func (w *scannerWorker) DoScanIteration() error {
 				if err != nil {
 					return err
 				}
+				continue
+			}
+
+			// A rate limit applies to the whole client, so stop this batch
+			// instead of immediately requesting every remaining repo.
+			if errors.Is(err, github.ErrRateLimit) {
+				w.logger.Info("stopping batch after github rate limit")
+				break
 			}
 
 			continue
