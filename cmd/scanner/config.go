@@ -24,7 +24,8 @@ type Config struct {
 
 	Concurrency ConcurrencyCfg
 
-	GhApiUrl string
+	GhApiUrl    string
+	GithubToken string
 }
 
 type ConcurrencyCfg struct {
@@ -46,6 +47,9 @@ func loadConfig() (Config, error) {
 			Interval:         10 * time.Second,
 			IterationTimeout: 10 * time.Second,
 			LeaseDuration:    20 * time.Second,
+
+			GithubMaxAttempts: 3,
+			GithubRetryBase:   500 * time.Millisecond,
 		},
 
 		OutboxCfg: outbox.Config{
@@ -59,7 +63,8 @@ func loadConfig() (Config, error) {
 			ScannerWorkers: 1,
 		},
 
-		GhApiUrl: os.Getenv("GH_API_URL"),
+		GhApiUrl:    os.Getenv("GH_API_URL"),
+		GithubToken: os.Getenv("GITHUB_TOKEN"),
 	}
 
 	if cfg.DbBaseUrl == "" {

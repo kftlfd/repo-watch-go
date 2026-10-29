@@ -21,7 +21,8 @@ type Config struct {
 
 	OutboxCfg outbox.Config
 
-	GhApiUrl string
+	GhApiUrl    string
+	GithubToken string
 }
 
 func loadConfig() (Config, error) {
@@ -42,7 +43,8 @@ func loadConfig() (Config, error) {
 			LoopIterationTimeout: 3 * time.Second,
 		},
 
-		GhApiUrl: os.Getenv("GH_API_URL"),
+		GhApiUrl:    os.Getenv("GH_API_URL"),
+		GithubToken: os.Getenv("GITHUB_TOKEN"),
 	}
 
 	if cfg.DbBaseUrl == "" {

@@ -89,7 +89,10 @@ func run(logger *slog.Logger) error {
 
 	logger.Info("initiating components")
 
-	githubClient := github.NewClient(github.WithBaseURL(cfg.GhApiUrl))
+	githubClient := github.NewClient(
+		github.WithBaseURL(cfg.GhApiUrl),
+		github.WithApiKey(cfg.GithubToken),
+	)
 
 	queries := database.New(db)
 
