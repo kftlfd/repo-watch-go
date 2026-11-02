@@ -15,7 +15,6 @@ import (
 	"repo-watch/internal/scanner/database"
 	"repo-watch/internal/scanner/database/migrations"
 	"repo-watch/internal/scanner/inbox"
-	"repo-watch/internal/scanner/metrics"
 	"repo-watch/internal/scanner/outbox"
 	"repo-watch/internal/scanner/worker"
 	"sync"
@@ -96,7 +95,6 @@ func run(logger *slog.Logger) error {
 	queries := database.New(db)
 
 	metricsReg := prometheus.NewRegistry()
-	metricsClient := metrics.NewClient(metricsReg)
 
 	inboxWorker, err := inbox.NewInboxWorker(inbox.Deps{
 		Logger:  logger,
@@ -117,7 +115,7 @@ func run(logger *slog.Logger) error {
 		Queries:      queries,
 		Publisher:    pub,
 		GithubClient: githubClient,
-		Metrics:      metricsClient,
+		Metrics:      worker.NewMetrics(metricsReg),
 	})
 
 	outboxDispatcher, err := outbox.NewDispatcher(outbox.Deps{

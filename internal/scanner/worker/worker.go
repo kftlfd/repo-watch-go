@@ -17,11 +17,6 @@ type GithubClient interface {
 	GetLatestReleaseTag(ctx context.Context, owner, repo string) (string, error)
 }
 
-type Metrics interface {
-	ScanOk()
-	ScanErr()
-}
-
 const (
 	persistenceTimeout = 5 * time.Second
 
