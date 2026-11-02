@@ -16,14 +16,10 @@ type subsService interface {
 	GetSubscriptionsList(ctx context.Context, email string) ([]string, error)
 }
 
-type metrics interface {
-	HTTPRequest(method, path string, status int, duration time.Duration)
-}
-
 type HandlerDeps struct {
 	Logger      *slog.Logger
 	SubsService subsService
-	Metrics     metrics
+	Metrics     Metrics
 }
 
 type handler struct {
@@ -46,7 +42,7 @@ func NewHandler(d HandlerDeps) http.Handler {
 	return g
 }
 
-func observabilityMiddleware(logger *slog.Logger, m metrics) gin.HandlerFunc {
+func observabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.FullPath()

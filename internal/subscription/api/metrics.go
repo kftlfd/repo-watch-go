@@ -1,4 +1,4 @@
-package metrics
+package api
 
 import (
 	"strconv"
@@ -7,13 +7,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-type client struct {
+type Metrics interface {
+	HTTPRequest(method, path string, status int, duration time.Duration)
+}
+
+type metrics struct {
 	httpRequests *prometheus.CounterVec
 	httpDuration *prometheus.HistogramVec
 }
 
-func NewClient(reg prometheus.Registerer) *client {
-	m := &client{
+func NewMetrics(reg prometheus.Registerer) *metrics {
+	m := &metrics{
 		httpRequests: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "http_requests_total",
@@ -39,7 +43,7 @@ func NewClient(reg prometheus.Registerer) *client {
 	return m
 }
 
-func (m *client) HTTPRequest(
+func (m *metrics) HTTPRequest(
 	method string,
 	path string,
 	status int,

@@ -16,7 +16,6 @@ import (
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/database/migrations"
 	"repo-watch/internal/subscription/inbox"
-	"repo-watch/internal/subscription/metrics"
 	"repo-watch/internal/subscription/outbox"
 	"repo-watch/internal/subscription/subs"
 	"sync"
@@ -126,7 +125,6 @@ func run(logger *slog.Logger) error {
 	})
 
 	metricsReg := prometheus.NewRegistry()
-	metricsClient := metrics.NewClient(metricsReg)
 
 	if !cfg.IsDev {
 		gin.SetMode(gin.ReleaseMode)
@@ -167,7 +165,7 @@ func run(logger *slog.Logger) error {
 		apiHandler := api.NewHandler(api.HandlerDeps{
 			Logger:      apiLogger,
 			SubsService: subsSvc,
-			Metrics:     metricsClient,
+			Metrics:     api.NewMetrics(metricsReg),
 		})
 		apiServer := httpserver.NewServer(httpserver.ServerDeps{
 			Logger:  apiLogger,
