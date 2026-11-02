@@ -17,6 +17,9 @@ type Outbox struct {
 	CreatedAt   time.Time
 	LeasedUntil sql.NullTime
 	PublishedAt sql.NullTime
+	Attempts    int32
+	LastError   string
+	FailedAt    sql.NullTime
 }
 
 type Release struct {

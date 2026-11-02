@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMapOutboxRowRepoRemoved(t *testing.T) {
+func TestGetPayloadRepoRemoved(t *testing.T) {
 	row := database.Outbox{
 		ID:           1,
 		Type:         "repo_removed",
@@ -24,13 +24,12 @@ func TestMapOutboxRowRepoRemoved(t *testing.T) {
 		CreatedAt:    time.Now(),
 	}
 
-	got, err := mapOutboxRow(row)
+	evType, evPayload, err := getEventPayload(row)
 	require.NoError(t, err)
-	require.Equal(t, rabbitmq.EventEmailQueued, got.EventType)
-	require.Equal(t, int32(1), got.ID)
+	require.Equal(t, rabbitmq.EventEmailQueued, evType)
 
 	var event rabbitmq.EventEmailQueuedPayload
-	require.NoError(t, json.Unmarshal(got.Payload, &event))
+	require.NoError(t, json.Unmarshal(evPayload, &event))
 	require.Equal(t, "alice@example.com", event.Recipient)
 	require.Equal(t, emails.EmailRepositoryRemoved, event.Type)
 
@@ -39,7 +38,7 @@ func TestMapOutboxRowRepoRemoved(t *testing.T) {
 	require.Equal(t, "owner/repository", data.RepoID)
 }
 
-func TestMapOutboxRowNewRelease(t *testing.T) {
+func TestGetPayloadNewRelease(t *testing.T) {
 	row := database.Outbox{
 		ID:           2,
 		Type:         "new_release",
@@ -51,12 +50,12 @@ func TestMapOutboxRowNewRelease(t *testing.T) {
 		CreatedAt:    time.Now(),
 	}
 
-	got, err := mapOutboxRow(row)
+	evType, evPayload, err := getEventPayload(row)
 	require.NoError(t, err)
-	require.Equal(t, rabbitmq.EventEmailQueued, got.EventType)
+	require.Equal(t, rabbitmq.EventEmailQueued, evType)
 
 	var event rabbitmq.EventEmailQueuedPayload
-	require.NoError(t, json.Unmarshal(got.Payload, &event))
+	require.NoError(t, json.Unmarshal(evPayload, &event))
 	require.Equal(t, "bob@example.com", event.Recipient)
 	require.Equal(t, emails.EmailNewReleaseNotification, event.Type)
 
@@ -69,7 +68,7 @@ func TestMapOutboxRowNewRelease(t *testing.T) {
 	require.Equal(t, "unsub-token", data.UnsubToken)
 }
 
-func TestMapOutboxRowUnknownType(t *testing.T) {
-	_, err := mapOutboxRow(database.Outbox{Type: "unknown"})
-	require.ErrorContains(t, err, `unexpected outbox event type: "unknown"`)
+func TestGetPayloadUnknownType(t *testing.T) {
+	_, _, err := getEventPayload(database.Outbox{Type: "unknown"})
+	require.ErrorContains(t, err, "unknown")
 }

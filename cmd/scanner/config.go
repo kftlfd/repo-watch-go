@@ -52,12 +52,7 @@ func loadConfig() (Config, error) {
 			GithubRetryBase:   500 * time.Millisecond,
 		},
 
-		OutboxCfg: outbox.Config{
-			BatchSize:            5,
-			LoopInterval:         5 * time.Second,
-			LeaseDuration:        5 * time.Second,
-			LoopIterationTimeout: 3 * time.Second,
-		},
+		OutboxCfg: outbox.Config{},
 
 		Concurrency: ConcurrencyCfg{
 			ScannerWorkers: 1,

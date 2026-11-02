@@ -95,6 +95,8 @@ func run(logger *slog.Logger) error {
 
 	queries := database.New(db)
 
+	metricsReg := prometheus.NewRegistry()
+
 	subsSvc := subs.NewService(subs.Deps{
 		DB:           db,
 		GithubClient: githubClient,
@@ -111,6 +113,7 @@ func run(logger *slog.Logger) error {
 		Cfg:     cfg.OutboxCfg,
 		Logger:  logger,
 		Pub:     pub,
+		Metrics: outbox.NewMetrics(metricsReg),
 		Queries: queries,
 	})
 	if err != nil {
@@ -123,8 +126,6 @@ func run(logger *slog.Logger) error {
 		Rabbit:  rabbit,
 		Queries: queries,
 	})
-
-	metricsReg := prometheus.NewRegistry()
 
 	if !cfg.IsDev {
 		gin.SetMode(gin.ReleaseMode)
@@ -153,7 +154,7 @@ func run(logger *slog.Logger) error {
 	})
 
 	wg.Go(func() {
-		outboxDispatcher.Start(ctx, cancel)
+		cancel(outboxDispatcher.Start(ctx))
 	})
 
 	wg.Go(func() {

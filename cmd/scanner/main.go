@@ -122,6 +122,7 @@ func run(logger *slog.Logger) error {
 		Cfg:     cfg.OutboxCfg,
 		Logger:  logger,
 		Pub:     pub,
+		Metrics: outbox.NewMetrics(metricsReg),
 		Queries: queries,
 	})
 	if err != nil {
@@ -155,7 +156,7 @@ func run(logger *slog.Logger) error {
 	})
 
 	wg.Go(func() {
-		outboxDispatcher.Start(ctx, cancel)
+		cancel(outboxDispatcher.Start(ctx))
 	})
 
 	wg.Go(func() {

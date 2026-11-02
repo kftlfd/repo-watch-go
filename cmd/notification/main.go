@@ -87,6 +87,8 @@ func run(logger *slog.Logger) error {
 
 	queries := database.New(db)
 
+	metricsReg := prometheus.NewRegistry()
+
 	inboxWorker, err := inbox.NewInboxWorker(inbox.Deps{
 		Logger:  logger,
 		Rabbit:  rabbit,
@@ -106,6 +108,7 @@ func run(logger *slog.Logger) error {
 		Cfg:     cfg.OutboxCfg,
 		Logger:  logger,
 		Pub:     pub,
+		Metrics: outbox.NewMetrics(metricsReg),
 		Queries: queries,
 	})
 	if err != nil {
@@ -121,7 +124,7 @@ func run(logger *slog.Logger) error {
 	wg.Go(func() {
 		srv := httpserver.NewServer(httpserver.ServerDeps{
 			Logger:  logger.With("module", "server_admin"),
-			Handler: admin.NewHandler(prometheus.NewRegistry()),
+			Handler: admin.NewHandler(metricsReg),
 			Port:    cfg.PortAdmin,
 		})
 		srv.Start(ctx, cancel)
@@ -139,7 +142,7 @@ func run(logger *slog.Logger) error {
 	})
 
 	wg.Go(func() {
-		outboxDispatcher.Start(ctx, cancel)
+		cancel(outboxDispatcher.Start(ctx))
 	})
 
 	wg.Go(func() {

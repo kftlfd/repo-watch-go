@@ -22,10 +22,20 @@ CREATE TABLE outbox (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     leased_until TIMESTAMPTZ,
     published_at TIMESTAMPTZ,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    failed_at TIMESTAMPTZ,
     UNIQUE(email, repository_id, tag)
 );
 
+CREATE INDEX outbox_retryable_idx ON outbox (id)
+WHERE
+    published_at IS NULL
+    AND failed_at IS NULL;
+
 -- +goose Down
+DROP INDEX IF EXISTS outbox_retryable_idx;
+
 DROP TABLE IF EXISTS outbox;
 
 DROP TABLE IF EXISTS subscriptions;
