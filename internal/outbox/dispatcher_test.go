@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strconv"
@@ -109,11 +110,13 @@ type fakeMetrics struct {
 	published    int
 	retries      int
 	deadLettered int
+	unavailable  int
 }
 
 func (m *fakeMetrics) Published(count int) { m.published += count }
 func (m *fakeMetrics) Retry()              { m.retries++ }
 func (m *fakeMetrics) DeadLettered()       { m.deadLettered++ }
+func (m *fakeMetrics) Unavailable()        { m.unavailable++ }
 
 func ptr[T any](v T) *T {
 	return &v
@@ -338,6 +341,96 @@ func TestRunIterationStopsRetryingAfterLeaseExpiry(t *testing.T) {
 	require.Empty(t, store.markPublishedIDs)
 	require.Len(t, store.failures, 1)
 	require.False(t, store.failures[0].Result.Terminal)
+	require.Zero(t, metrics.deadLettered)
+}
+
+func TestRunIterationDoesNotConsumeAttemptWhenClientIsUnavailable(t *testing.T) {
+	store := &fakeStore{rows: []Row{testRow(1), testRow(2)}}
+	pub := &fakePublisher{alwaysErr: fmt.Errorf(
+		"%w: connection closed", rabbitmq.ErrUnavailable)}
+	metrics := &fakeMetrics{}
+	d := newTestDispatcher(t, store, pub, testConfig(), metrics)
+
+	processed, err := d.runIteration(context.Background())
+
+	require.ErrorIs(t, err, rabbitmq.ErrUnavailable)
+	require.Zero(t, processed)
+	require.Len(t, pub.calls, 1, "the batch stops when the broker is unavailable")
+	require.Empty(t, store.markPublishedIDs)
+	require.Empty(t, store.failures, "an outage must not count against the attempt budget")
+	require.Zero(t, metrics.unavailable, "the loop, not a single iteration, records unavailable")
+	require.Zero(t, metrics.retries)
+	require.Zero(t, metrics.deadLettered)
+}
+
+func TestRunIterationKeepsEarlierPublishesWhenBrokerBecomesUnavailable(t *testing.T) {
+	store := &fakeStore{rows: []Row{testRow(1), testRow(2), testRow(3)}}
+	pub := &fakePublisher{errs: []error{
+		nil,
+		fmt.Errorf("%w: channel closed", rabbitmq.ErrUnavailable),
+	}}
+	metrics := &fakeMetrics{}
+	d := newTestDispatcher(t, store, pub, testConfig(), metrics)
+
+	processed, err := d.runIteration(context.Background())
+
+	require.ErrorIs(t, err, rabbitmq.ErrUnavailable)
+	require.Equal(t, 1, processed)
+	require.Len(t, pub.calls, 2)
+	require.Equal(t, []int32{1}, store.markPublishedIDs)
+	require.Empty(t, store.failures)
+	require.Equal(t, 1, metrics.published)
+	require.Zero(t, metrics.unavailable, "the loop, not a single iteration, records unavailable")
+}
+
+func TestRunIterationConsumesAttemptWhenConnectionIsLostDuringPublish(t *testing.T) {
+	cfg := testConfig()
+	cfg.MaxAttempts = ptr(int32(1))
+
+	store := &fakeStore{rows: []Row{testRow(1), testRow(2)}}
+	// A connection loss during publishing surfaces as a plain publish error,
+	// not as ErrUnavailable from the client. It is ambiguous whether the
+	// broker persisted the event, so the row consumes an attempt.
+	pub := &fakePublisher{alwaysErr: errors.New("amqp: connection closed")}
+	metrics := &fakeMetrics{}
+	d := newTestDispatcher(t, store, pub, cfg, metrics)
+
+	processed, err := d.runIteration(context.Background())
+
+	require.ErrorContains(t, err, "exceeded 1 attempts")
+	require.Equal(t, 1, processed)
+	require.Len(t, pub.calls, 1, "the batch stops after the connection is lost")
+	require.Empty(t, store.markPublishedIDs)
+	require.Len(t, store.failures, 1)
+	require.Equal(t, int32(1), store.failures[0].ID)
+	require.True(t, store.failures[0].Result.Terminal)
+	require.Equal(t, 1, metrics.deadLettered)
+	require.Zero(t, metrics.unavailable)
+	require.Zero(t, metrics.retries)
+}
+
+func TestRunLoopRecordsUnavailableIterations(t *testing.T) {
+	store := &fakeStore{rows: []Row{testRow(1)}}
+	pub := &fakePublisher{alwaysErr: fmt.Errorf(
+		"%w: connection closed", rabbitmq.ErrUnavailable)}
+	metrics := &fakeMetrics{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var delays []time.Duration
+	d := newTestDispatcher(t, store, pub, testConfig(), metrics, withSleep(func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		cancel()
+		return context.Canceled
+	}))
+
+	err := d.Start(ctx)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, []time.Duration{time.Millisecond}, delays)
+	require.Equal(t, 1, metrics.unavailable)
+	require.Zero(t, metrics.retries)
 	require.Zero(t, metrics.deadLettered)
 }
 
