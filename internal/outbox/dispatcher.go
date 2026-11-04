@@ -199,10 +199,16 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 				return ctx.Err()
 			}
 
-			if errors.Is(err, context.DeadlineExceeded) {
+			switch {
+			case errors.Is(err, rabbitmq.ErrClosed):
+				return err
+			case errors.Is(err, rabbitmq.ErrUnavailable):
+				d.metrics.Unavailable()
+				d.logger.Warn("outbox paused while rabbitmq is unavailable", "error", err)
+			case errors.Is(err, context.DeadlineExceeded):
 				d.logger.Warn("outbox iteration timed out", "error", err)
-			} else {
-				d.logger.Error("outbox iteration ended with errors", "error", err)
+			default:
+				d.logger.Error("outbox iteration failed; retrying", "error", err)
 			}
 
 			if err := d.sleep(ctx, backoff); err != nil {
@@ -320,17 +326,21 @@ func (d *Dispatcher) publishWithRetry(
 			return false, false, ctx.Err()
 		}
 
-		failure, recordErr := d.recordFailure(ctx, row, err.Error(), false)
+		if errors.Is(err, rabbitmq.ErrClosed) || errors.Is(err, rabbitmq.ErrUnavailable) {
+			return false, false, err
+		}
+
+		isTerminal := false
+		if errors.Is(err, rabbitmq.ErrInvalid) {
+			isTerminal = true
+		}
+
+		failure, recordErr := d.recordFailure(ctx, row, err.Error(), isTerminal)
 		if recordErr != nil {
-			return false, false, errors.Join(
-				fmt.Errorf("publish outbox row %d: %w", row.ID, err),
-				recordErr,
-			)
+			return false, false, fmt.Errorf("record event failure %q: %w", row.EventID, recordErr)
 		}
 		if failure.Terminal {
-			return false, true, fmt.Errorf(
-				"outbox row %d exceeded %d attempts: %w",
-				row.ID, d.cfg.maxAttempts, err)
+			return false, true, fmt.Errorf("event %q exceeded %d attempts: %w", row.EventID, d.cfg.maxAttempts, err)
 		}
 
 		d.logger.Error(

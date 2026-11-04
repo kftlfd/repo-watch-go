@@ -6,12 +6,14 @@ type MetricsRecorder interface {
 	Published(count int)
 	Retry()
 	DeadLettered()
+	Unavailable()
 }
 
 type Metrics struct {
 	published    prometheus.Counter
 	retries      prometheus.Counter
 	deadLettered prometheus.Counter
+	unavailable  prometheus.Counter
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -28,9 +30,13 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "outbox_events_dead_lettered_total",
 			Help: "Total number of outbox events abandoned after reaching the attempt limit.",
 		}),
+		unavailable: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "outbox_publish_unavailable_total",
+			Help: "Total number of outbox publish attempts skipped because RabbitMQ was unavailable.",
+		}),
 	}
 
-	reg.MustRegister(m.published, m.retries, m.deadLettered)
+	reg.MustRegister(m.published, m.retries, m.deadLettered, m.unavailable)
 
 	return m
 }
@@ -49,8 +55,13 @@ func (m *Metrics) DeadLettered() {
 	m.deadLettered.Inc()
 }
 
+func (m *Metrics) Unavailable() {
+	m.unavailable.Inc()
+}
+
 type noopMetrics struct{}
 
 func (noopMetrics) Published(int) {}
 func (noopMetrics) Retry()        {}
 func (noopMetrics) DeadLettered() {}
+func (noopMetrics) Unavailable()  {}
