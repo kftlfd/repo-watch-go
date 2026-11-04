@@ -8,7 +8,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func NewHandler(metricsRegistry prometheus.Gatherer) http.Handler {
+type Deps struct {
+	Metrics prometheus.Gatherer
+	// Ready must return nil when the service can serve traffic. A nil Ready
+	// check keeps the endpoint unconditionally ready, which is useful for
+	// services without external dependencies.
+	Ready func() error
+}
+
+func NewHandler(d Deps) http.Handler {
 	g := gin.New()
 	g.Use(gin.Recovery())
 
@@ -17,11 +25,21 @@ func NewHandler(metricsRegistry prometheus.Gatherer) http.Handler {
 	})
 
 	g.GET("/ready", func(c *gin.Context) {
+		if d.Ready != nil {
+			if err := d.Ready(); err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"status": "not ready",
+					"error":  err.Error(),
+				})
+				return
+			}
+		}
+
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
 
 	g.GET("/metrics", gin.WrapH(
-		promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{})),
+		promhttp.HandlerFor(d.Metrics, promhttp.HandlerOpts{})),
 	)
 
 	return g

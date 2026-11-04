@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -49,21 +50,30 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	logger.Info("preparing rabbitmq")
-	rabbit, err := rabbitmq.Connect(cfg.RabbitMQUrl)
+	metricsReg := prometheus.NewRegistry()
+	rabbitMetrics := rabbitmq.NewMetrics(metricsReg)
+
+	logger.Info("connecting to rabbitmq")
+	rabbit, err := rabbitmq.Connect(rabbitmq.ClientConfig{
+		URL:     cfg.RabbitMQUrl,
+		Logger:  logger,
+		Metrics: rabbitMetrics,
+	})
 	if err != nil {
-		return fmt.Errorf("RabbitMQ connect: %w", err)
+		return fmt.Errorf("connect rabbitmq: %w", err)
 	}
 	defer rabbit.Close()
-	if err := rabbitmq.EnsureTopology(rabbit); err != nil {
-		return fmt.Errorf("ensure rabbit topology: %w", err)
+
+	rabbitConsumer, err := rabbitmq.NewConsumer(rabbit, logger, rabbitMetrics)
+	if err != nil {
+		return fmt.Errorf("create rabbit consumer: %w", err)
 	}
 
 	logger.Info("initiating components")
 
 	mailerWorker, err := mailer.NewMailer(mailer.Deps{
-		Logger: logger,
-		Rabbit: rabbit,
+		Logger:         logger,
+		RabbitConsumer: rabbitConsumer,
 	})
 	if err != nil {
 		return fmt.Errorf("create mailer worker: %w", err)
@@ -71,9 +81,16 @@ func run(logger *slog.Logger) error {
 
 	var wg sync.WaitGroup
 
-	wg.Go(func() {
-		mailerWorker.Start(ctx)
-	})
+	runWorker := func(name string, fn func(context.Context) error) {
+		wg.Go(func() {
+			if err := fn(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("worker failed", "worker", name, "error", err)
+				cancel(fmt.Errorf("%s: %w", name, err))
+			}
+		})
+	}
+
+	runWorker("mailer", mailerWorker.Start)
 
 	logger.Info("all components initiated")
 
