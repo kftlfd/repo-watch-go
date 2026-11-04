@@ -5,7 +5,6 @@ import (
 	"os"
 	"repo-watch/internal/notification/outbox"
 	"repo-watch/internal/postgres"
-	"time"
 )
 
 type Config struct {
@@ -31,12 +30,7 @@ func loadConfig() (Config, error) {
 
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
 
-		OutboxCfg: outbox.Config{
-			BatchSize:            5,
-			LoopInterval:         5 * time.Second,
-			LeaseDuration:        5 * time.Second,
-			LoopIterationTimeout: 3 * time.Second,
-		},
+		OutboxCfg: outbox.Config{},
 	}
 
 	if cfg.DbBaseUrl == "" {

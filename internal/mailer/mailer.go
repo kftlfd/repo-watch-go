@@ -9,35 +9,35 @@ import (
 	"repo-watch/internal/emails"
 	"repo-watch/internal/rabbitmq"
 	"strings"
-
-	"github.com/rabbitmq/amqp091-go"
 )
 
 type Deps struct {
-	Logger *slog.Logger
-	Rabbit *amqp091.Connection
+	Logger         *slog.Logger
+	RabbitConsumer rabbitmq.RabbitJSONConsumer
 }
 
 type mailerWorker struct {
 	logger   *slog.Logger
-	consumer *rabbitmq.Consumer
+	consumer rabbitmq.RabbitJSONConsumer
 }
 
 func NewMailer(d Deps) (*mailerWorker, error) {
-	consumer, err := rabbitmq.NewConsumer(d.Rabbit, d.Logger)
-	if err != nil {
-		return nil, fmt.Errorf("create consumer: %w", err)
+	if d.RabbitConsumer == nil {
+		return nil, fmt.Errorf("missing RabbitConsumer")
+	}
+	if d.Logger == nil {
+		return nil, fmt.Errorf("missing logger")
 	}
 
 	return &mailerWorker{
 		logger:   d.Logger.With("module", "mailer_worker"),
-		consumer: consumer,
+		consumer: d.RabbitConsumer,
 	}, nil
 }
 
-func (m *mailerWorker) Start(ctx context.Context) {
+func (m *mailerWorker) Start(ctx context.Context) error {
 	m.logger.Info("starting")
-	m.consumer.ConsumeJSON(ctx, rabbitmq.QueueMailerInbox, m.handler)
+	return m.consumer.ConsumeJSON(ctx, rabbitmq.QueueMailerInbox, m.handler)
 }
 
 func (m *mailerWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, error) {

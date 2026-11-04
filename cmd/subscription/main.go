@@ -16,7 +16,6 @@ import (
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/database/migrations"
 	"repo-watch/internal/subscription/inbox"
-	"repo-watch/internal/subscription/metrics"
 	"repo-watch/internal/subscription/outbox"
 	"repo-watch/internal/subscription/subs"
 	"sync"
@@ -78,13 +77,28 @@ func run(logger *slog.Logger) error {
 	}
 
 	logger.Info("preparing rabbitmq")
-	rabbit, err := rabbitmq.Connect(cfg.RabbitMQUrl)
+
+	metricsReg := prometheus.NewRegistry()
+	rabbitMetrics := rabbitmq.NewMetrics(metricsReg)
+
+	logger.Info("connecting to rabbitmq")
+	rabbit, err := rabbitmq.Connect(rabbitmq.ClientConfig{
+		URL:     cfg.RabbitMQUrl,
+		Logger:  logger,
+		Metrics: rabbitMetrics,
+	})
 	if err != nil {
-		return fmt.Errorf("RabbitMQ connect: %w", err)
+		return fmt.Errorf("connect rabbitmq: %w", err)
 	}
 	defer rabbit.Close()
-	if err := rabbitmq.EnsureTopology(rabbit); err != nil {
-		return fmt.Errorf("ensure rabbit topology: %w", err)
+
+	rabbitConsumer, err := rabbitmq.NewConsumer(rabbit, logger, rabbitMetrics)
+	if err != nil {
+		return fmt.Errorf("create rabbit consumer: %w", err)
+	}
+	rabbitPublisher, err := rabbitmq.NewPublisher(rabbit, logger, rabbitMetrics)
+	if err != nil {
+		return fmt.Errorf("create rabbit publisher: %w", err)
 	}
 
 	logger.Info("initiating components")
@@ -102,16 +116,11 @@ func run(logger *slog.Logger) error {
 		Queries:      queries,
 	})
 
-	pub, err := rabbitmq.NewPublisher(rabbit)
-	if err != nil {
-		return fmt.Errorf("rabbit publisher: %w", err)
-	}
-	defer pub.Close()
-
 	outboxDispatcher, err := outbox.NewDispatcher(outbox.Deps{
 		Cfg:     cfg.OutboxCfg,
 		Logger:  logger,
-		Pub:     pub,
+		Pub:     rabbitPublisher,
+		Metrics: outbox.NewMetrics(metricsReg),
 		Queries: queries,
 	})
 	if err != nil {
@@ -119,14 +128,14 @@ func run(logger *slog.Logger) error {
 	}
 
 	inboxWorker, err := inbox.NewInboxWorker(inbox.Deps{
-		Logger:  logger,
-		DB:      db,
-		Rabbit:  rabbit,
-		Queries: queries,
+		Logger:         logger,
+		DB:             db,
+		RabbitConsumer: rabbitConsumer,
+		Queries:        queries,
 	})
-
-	metricsReg := prometheus.NewRegistry()
-	metricsClient := metrics.NewClient(metricsReg)
+	if err != nil {
+		return fmt.Errorf("create inbox worker: %w", err)
+	}
 
 	if !cfg.IsDev {
 		gin.SetMode(gin.ReleaseMode)
@@ -134,40 +143,36 @@ func run(logger *slog.Logger) error {
 
 	var wg sync.WaitGroup
 
+	runWorker := func(name string, fn func(context.Context) error) {
+		wg.Go(func() {
+			if err := fn(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("worker failed", "worker", name, "error", err)
+				cancel(fmt.Errorf("%s: %w", name, err))
+			}
+		})
+	}
+
 	wg.Go(func() {
 		srv := httpserver.NewServer(httpserver.ServerDeps{
-			Logger:  logger.With("module", "admin_server"),
-			Handler: admin.NewHandler(metricsReg),
-			Port:    cfg.PortAdmin,
+			Logger: logger.With("module", "admin_server"),
+			Handler: admin.NewHandler(admin.Deps{
+				Metrics: metricsReg,
+				Ready:   rabbit.Ready,
+			}),
+			Port: cfg.PortAdmin,
 		})
 		srv.Start(ctx, cancel)
 	})
 
-	wg.Go(func() {
-		for {
-			select {
-			case ret := <-pub.Returns():
-				logger.Error("rabbitmq message returned", "msg", ret)
-			case <-ctx.Done():
-				return
-			}
-		}
-	})
-
-	wg.Go(func() {
-		outboxDispatcher.Start(ctx, cancel)
-	})
-
-	wg.Go(func() {
-		inboxWorker.Start(ctx)
-	})
+	runWorker("outbox dispatcher", outboxDispatcher.Start)
+	runWorker("inbox", inboxWorker.Start)
 
 	wg.Go(func() {
 		apiLogger := logger.With("module", "api_server")
 		apiHandler := api.NewHandler(api.HandlerDeps{
 			Logger:      apiLogger,
 			SubsService: subsSvc,
-			Metrics:     metricsClient,
+			Metrics:     api.NewMetrics(metricsReg),
 		})
 		apiServer := httpserver.NewServer(httpserver.ServerDeps{
 			Logger:  apiLogger,

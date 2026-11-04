@@ -5,7 +5,6 @@ import (
 	"os"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/subscription/outbox"
-	"time"
 )
 
 type Config struct {
@@ -36,12 +35,7 @@ func loadConfig() (Config, error) {
 
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
 
-		OutboxCfg: outbox.Config{
-			BatchSize:            5,
-			LoopInterval:         5 * time.Second,
-			LeaseDuration:        5 * time.Second,
-			LoopIterationTimeout: 3 * time.Second,
-		},
+		OutboxCfg: outbox.Config{},
 
 		GhApiUrl:    os.Getenv("GH_API_URL"),
 		GithubToken: os.Getenv("GITHUB_TOKEN"),

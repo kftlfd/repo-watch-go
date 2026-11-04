@@ -1,14 +1,19 @@
-package metrics
+package worker
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+type Metrics interface {
+	ScanOk()
+	ScanErr()
+}
+
 type client struct {
 	repoScans *prometheus.CounterVec
 }
 
-func NewClient(reg prometheus.Registerer) *client {
+func NewMetrics(reg prometheus.Registerer) *client {
 	m := &client{
 		repoScans: prometheus.NewCounterVec(
 			prometheus.CounterOpts{

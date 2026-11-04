@@ -8,41 +8,41 @@ import (
 	"log/slog"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/database"
-
-	"github.com/rabbitmq/amqp091-go"
 )
 
 type Deps struct {
-	Logger  *slog.Logger
-	Rabbit  *amqp091.Connection
-	DB      *sql.DB
-	Queries *database.Queries
+	Logger         *slog.Logger
+	RabbitConsumer rabbitmq.RabbitJSONConsumer
+	DB             *sql.DB
+	Queries        *database.Queries
 }
 
 type inboxWorker struct {
 	logger   *slog.Logger
 	db       *sql.DB
 	q        *database.Queries
-	consumer *rabbitmq.Consumer
+	consumer rabbitmq.RabbitJSONConsumer
 }
 
 func NewInboxWorker(d Deps) (*inboxWorker, error) {
-	consumer, err := rabbitmq.NewConsumer(d.Rabbit, d.Logger)
-	if err != nil {
-		return nil, fmt.Errorf("create consumer: %w", err)
+	if d.RabbitConsumer == nil {
+		return nil, fmt.Errorf("missing RabbitConsumer")
+	}
+	if d.Logger == nil {
+		return nil, fmt.Errorf("missing logger")
 	}
 
 	return &inboxWorker{
 		logger:   d.Logger.With("module", "inbox_worker"),
 		db:       d.DB,
 		q:        d.Queries,
-		consumer: consumer,
+		consumer: d.RabbitConsumer,
 	}, nil
 }
 
-func (w *inboxWorker) Start(ctx context.Context) {
+func (w *inboxWorker) Start(ctx context.Context) error {
 	w.logger.Info("starting")
-	w.consumer.ConsumeJSON(ctx, rabbitmq.QueueSubscriptionInbox, w.handler)
+	return w.consumer.ConsumeJSON(ctx, rabbitmq.QueueSubscriptionInbox, w.handler)
 }
 
 func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, error) {

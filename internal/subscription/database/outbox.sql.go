@@ -18,7 +18,7 @@ INSERT INTO
     outbox (event_type, payload)
 VALUES
     ($1, $2)
-RETURNING id, event_type, payload, created_at, leased_until, published_at
+RETURNING id, event_type, payload, created_at, leased_until, published_at, attempts, last_error, failed_at
 `
 
 type CreateOutboxRowParams struct {
@@ -36,6 +36,9 @@ func (q *Queries) CreateOutboxRow(ctx context.Context, arg CreateOutboxRowParams
 		&i.CreatedAt,
 		&i.LeasedUntil,
 		&i.PublishedAt,
+		&i.Attempts,
+		&i.LastError,
+		&i.FailedAt,
 	)
 	return i, err
 }
@@ -58,6 +61,7 @@ WITH candidates AS (
     SELECT id
     FROM outbox
     WHERE published_at IS NULL
+        AND failed_at IS NULL
         AND (leased_until IS NULL OR leased_until < now())
     ORDER BY id ASC
     LIMIT $1
@@ -67,7 +71,7 @@ UPDATE outbox
 SET leased_until = $2
 FROM candidates
 WHERE outbox.id = candidates.id
-RETURNING outbox.id, outbox.event_type, outbox.payload, outbox.created_at, outbox.leased_until, outbox.published_at
+RETURNING outbox.id, outbox.event_type, outbox.payload, outbox.created_at, outbox.leased_until, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
 `
 
 type GetOutboxBatchParams struct {
@@ -91,6 +95,9 @@ func (q *Queries) GetOutboxBatch(ctx context.Context, arg GetOutboxBatchParams) 
 			&i.CreatedAt,
 			&i.LeasedUntil,
 			&i.PublishedAt,
+			&i.Attempts,
+			&i.LastError,
+			&i.FailedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -116,4 +123,49 @@ WHERE id = ANY($1::int[])
 func (q *Queries) MarkOutboxPublished(ctx context.Context, ids []int32) error {
 	_, err := q.db.ExecContext(ctx, markOutboxPublished, pq.Array(ids))
 	return err
+}
+
+const recordOutboxFailure = `-- name: RecordOutboxFailure :one
+UPDATE outbox
+SET
+    attempts = attempts + 1,
+    last_error = $1,
+    failed_at = CASE
+        WHEN $2::boolean OR attempts + 1 >= $3
+        THEN now()
+        ELSE NULL
+    END,
+    leased_until = CASE
+        WHEN $2::boolean OR attempts + 1 >= $3
+        THEN NULL
+        ELSE leased_until
+    END
+WHERE id = $4
+    AND published_at IS NULL
+    AND failed_at IS NULL
+RETURNING attempts, failed_at
+`
+
+type RecordOutboxFailureParams struct {
+	LastError   string
+	Terminal    bool
+	MaxAttempts int32
+	ID          int32
+}
+
+type RecordOutboxFailureRow struct {
+	Attempts int32
+	FailedAt sql.NullTime
+}
+
+func (q *Queries) RecordOutboxFailure(ctx context.Context, arg RecordOutboxFailureParams) (RecordOutboxFailureRow, error) {
+	row := q.db.QueryRowContext(ctx, recordOutboxFailure,
+		arg.LastError,
+		arg.Terminal,
+		arg.MaxAttempts,
+		arg.ID,
+	)
+	var i RecordOutboxFailureRow
+	err := row.Scan(&i.Attempts, &i.FailedAt)
+	return i, err
 }
