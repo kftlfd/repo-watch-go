@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"repo-watch/internal/postgres"
-	"repo-watch/internal/scanner/outbox"
 	"repo-watch/internal/scanner/worker"
 )
 
@@ -21,7 +20,6 @@ type Config struct {
 	RabbitMQUrl string
 
 	ScannerCfg worker.Config
-	OutboxCfg  outbox.Config
 
 	Concurrency ConcurrencyCfg
 
@@ -52,8 +50,6 @@ func loadConfig() (Config, error) {
 			GithubMaxAttempts: 3,
 			GithubRetryBase:   500 * time.Millisecond,
 		},
-
-		OutboxCfg: outbox.Config{},
 
 		Concurrency: ConcurrencyCfg{
 			ScannerWorkers: 1,

@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"repo-watch/internal/admin"
+	"repo-watch/internal/dispatcher"
 	"repo-watch/internal/github"
 	"repo-watch/internal/httpserver"
 	"repo-watch/internal/logger"
@@ -117,12 +118,11 @@ func run(logger *slog.Logger) error {
 		Queries:      queries,
 	})
 
-	outboxDispatcher, err := outbox.NewDispatcher(outbox.Deps{
-		Cfg:     cfg.OutboxCfg,
-		Logger:  logger,
-		Pub:     rabbitPublisher,
-		Metrics: outbox.NewMetrics(metricsReg),
-		Queries: queries,
+	outboxDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherDeps{
+		Logger:    logger.With("module", "subscription_outbox"),
+		Store:     outbox.NewSubsctiptionOutbox(queries),
+		Publisher: rabbitPublisher,
+		Metrics:   dispatcher.NewMetrics(metricsReg),
 	})
 	if err != nil {
 		return fmt.Errorf("outbox dispatcher: %w", err)

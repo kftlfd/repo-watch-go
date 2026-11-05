@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"repo-watch/internal/notification/outbox"
 	"repo-watch/internal/postgres"
 )
 
@@ -17,8 +16,6 @@ type Config struct {
 	DbName    string
 
 	RabbitMQUrl string
-
-	OutboxCfg outbox.Config
 }
 
 func loadConfig() (Config, error) {
@@ -30,8 +27,6 @@ func loadConfig() (Config, error) {
 		DbName:    "notification_db",
 
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
-
-		OutboxCfg: outbox.Config{},
 	}
 
 	if cfg.DbBaseUrl == "" {

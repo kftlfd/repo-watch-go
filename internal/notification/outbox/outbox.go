@@ -6,14 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
+	"repo-watch/internal/dispatcher"
 	"repo-watch/internal/emails"
 	"repo-watch/internal/notification/database"
-	"repo-watch/internal/outbox"
 	"repo-watch/internal/rabbitmq"
 )
 
@@ -92,7 +89,11 @@ type scannerOutbox struct {
 	q *database.Queries
 }
 
-func (s *scannerOutbox) GetNextBatch(ctx context.Context, batchSize int32, leasedUntil time.Time) ([]outbox.Row, error) {
+func NewScannerOutbox(queries *database.Queries) dispatcher.Store {
+	return &scannerOutbox{q: queries}
+}
+
+func (s *scannerOutbox) GetNextBatch(ctx context.Context, batchSize int32, leasedUntil time.Time) ([]dispatcher.Row, error) {
 	res, err := s.q.GetNotificationsBatch(ctx, database.GetNotificationsBatchParams{
 		Limit: batchSize,
 		LeasedUntil: sql.NullTime{
@@ -104,10 +105,10 @@ func (s *scannerOutbox) GetNextBatch(ctx context.Context, batchSize int32, lease
 		return nil, err
 	}
 
-	out := make([]outbox.Row, 0, len(res))
+	out := make([]dispatcher.Row, 0, len(res))
 
 	for _, row := range res {
-		outboxRow := outbox.Row{
+		outboxRow := dispatcher.Row{
 			ID:            row.ID,
 			EventType:     row.Type,
 			EventID:       getEventID(row.ID),
@@ -141,7 +142,7 @@ func (s *scannerOutbox) RecordFailure(
 	lastError string,
 	terminal bool,
 	maxAttempts int32,
-) (outbox.Failure, error) {
+) (dispatcher.Failure, error) {
 	res, err := s.q.RecordOutboxFailure(ctx, database.RecordOutboxFailureParams{
 		ID:          id,
 		LastError:   lastError,
@@ -149,42 +150,14 @@ func (s *scannerOutbox) RecordFailure(
 		MaxAttempts: maxAttempts,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return outbox.Failure{Terminal: true}, nil
+		return dispatcher.Failure{Terminal: true}, nil
 	}
 	if err != nil {
-		return outbox.Failure{}, err
+		return dispatcher.Failure{}, err
 	}
 
-	return outbox.Failure{
+	return dispatcher.Failure{
 		Attempts: res.Attempts,
 		Terminal: res.FailedAt.Valid,
 	}, nil
-}
-
-func NewMetrics(reg prometheus.Registerer) *outbox.Metrics {
-	return outbox.NewMetrics(reg)
-}
-
-type Config outbox.DispatcherConfig
-
-type Deps struct {
-	Cfg     Config
-	Logger  *slog.Logger
-	Pub     rabbitmq.RabbitJSONPublisher
-	Metrics outbox.MetricsRecorder
-	Queries *database.Queries
-}
-
-func NewDispatcher(d Deps) (*outbox.Dispatcher, error) {
-	store := &scannerOutbox{q: d.Queries}
-
-	ddeps := outbox.DispatcherDeps{
-		Config:    outbox.DispatcherConfig(d.Cfg),
-		Logger:    d.Logger.With("module", "notification_outbox"),
-		Publisher: d.Pub,
-		Store:     store,
-		Metrics:   d.Metrics,
-	}
-
-	return outbox.NewDispatcher(ddeps)
 }

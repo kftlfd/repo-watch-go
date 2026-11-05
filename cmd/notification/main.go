@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"repo-watch/internal/admin"
+	"repo-watch/internal/dispatcher"
 	"repo-watch/internal/httpserver"
 	"repo-watch/internal/logger"
 	"repo-watch/internal/notification/database"
@@ -119,12 +120,11 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("create dlq monitor: %w", err)
 	}
 
-	outboxDispatcher, err := outbox.NewDispatcher(outbox.Deps{
-		Cfg:     cfg.OutboxCfg,
-		Logger:  logger,
-		Pub:     rabbitPublisher,
-		Metrics: outbox.NewMetrics(metricsReg),
-		Queries: queries,
+	outboxDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherDeps{
+		Logger:    logger.With("module", "notification_outbox"),
+		Store:     outbox.NewScannerOutbox(queries),
+		Publisher: rabbitPublisher,
+		Metrics:   dispatcher.NewMetrics(metricsReg),
 	})
 	if err != nil {
 		return fmt.Errorf("outbox dispatcher: %w", err)

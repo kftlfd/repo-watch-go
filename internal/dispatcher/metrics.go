@@ -1,4 +1,4 @@
-package outbox
+package dispatcher
 
 import "github.com/prometheus/client_golang/prometheus"
 

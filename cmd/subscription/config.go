@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"repo-watch/internal/postgres"
-	"repo-watch/internal/subscription/outbox"
 )
 
 type Config struct {
@@ -18,8 +17,6 @@ type Config struct {
 	DbName    string
 
 	RabbitMQUrl string
-
-	OutboxCfg outbox.Config
 
 	GhApiUrl    string
 	GithubToken string
@@ -35,8 +32,6 @@ func loadConfig() (Config, error) {
 		DbName:    "subscription_db",
 
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
-
-		OutboxCfg: outbox.Config{},
 
 		GhApiUrl:    os.Getenv("GH_API_URL"),
 		GithubToken: os.Getenv("GITHUB_TOKEN"),
