@@ -6,16 +6,16 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	pg "github.com/testcontainers/testcontainers-go/modules/postgres"
+
 	notificationdatabase "repo-watch/internal/notification/database"
 	notificationmigrations "repo-watch/internal/notification/database/migrations"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/subs"
-
-	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	pg "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 type notificationTestDB struct {

@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	pg "github.com/testcontainers/testcontainers-go/modules/postgres"
+
 	"repo-watch/internal/github"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/database"
 	"repo-watch/internal/scanner/database/migrations"
-
-	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	pg "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 type scannerTestDB struct {

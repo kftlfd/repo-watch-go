@@ -3,10 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
+
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/scanner/outbox"
 	"repo-watch/internal/scanner/worker"
-	"time"
 )
 
 type Config struct {

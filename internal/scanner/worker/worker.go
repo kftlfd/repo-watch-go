@@ -7,10 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
+
 	"repo-watch/internal/github"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/database"
-	"time"
 )
 
 type GithubClient interface {

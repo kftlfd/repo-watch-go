@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"repo-watch/internal/subscription/subs"
-
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+
+	"repo-watch/internal/subscription/subs"
 )
 
 type fakeSubsService struct {

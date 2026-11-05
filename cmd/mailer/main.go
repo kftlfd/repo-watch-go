@@ -6,15 +6,16 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"repo-watch/internal/logger"
-	"repo-watch/internal/mailer"
-	"repo-watch/internal/rabbitmq"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"repo-watch/internal/logger"
+	"repo-watch/internal/mailer"
+	"repo-watch/internal/rabbitmq"
 )
 
 func main() {

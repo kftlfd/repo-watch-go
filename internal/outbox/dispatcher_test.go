@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"repo-watch/internal/rabbitmq"
-
 	"github.com/stretchr/testify/require"
+
+	"repo-watch/internal/rabbitmq"
 )
 
 type fakeStore struct {

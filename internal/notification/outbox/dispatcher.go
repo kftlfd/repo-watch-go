@@ -7,13 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+
 	"repo-watch/internal/emails"
 	"repo-watch/internal/notification/database"
 	"repo-watch/internal/outbox"
 	"repo-watch/internal/rabbitmq"
-	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 func getEventID(rowID int32) string {

@@ -6,6 +6,14 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus"
+
 	"repo-watch/internal/admin"
 	"repo-watch/internal/github"
 	"repo-watch/internal/httpserver"
@@ -17,13 +25,6 @@ import (
 	"repo-watch/internal/scanner/inbox"
 	"repo-watch/internal/scanner/outbox"
 	"repo-watch/internal/scanner/worker"
-	"sync"
-	"syscall"
-	"time"
-
-	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {

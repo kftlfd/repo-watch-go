@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"repo-watch/internal/notification/database"
-	"repo-watch/internal/rabbitmq"
-
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
+
+	"repo-watch/internal/notification/database"
+	"repo-watch/internal/rabbitmq"
 )
 
 func TestHandlerDiscardsInvalidPayload(t *testing.T) {

@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"net/mail"
 
-	"repo-watch/internal/subscription/subs"
-
 	"github.com/gin-gonic/gin"
+
+	"repo-watch/internal/subscription/subs"
 )
 
 const (

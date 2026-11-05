@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+
 	"repo-watch/internal/notification/outbox"
 	"repo-watch/internal/postgres"
 )

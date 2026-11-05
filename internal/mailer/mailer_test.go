@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"repo-watch/internal/emails"
 	"repo-watch/internal/rabbitmq"
-
-	"github.com/stretchr/testify/require"
 )
 
 func TestRenderEmail(t *testing.T) {

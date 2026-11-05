@@ -6,13 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"repo-watch/internal/outbox"
-	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/scanner/database"
 	"slices"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"repo-watch/internal/outbox"
+	"repo-watch/internal/rabbitmq"
+	"repo-watch/internal/scanner/database"
 )
 
 var validEventTypes = []string{

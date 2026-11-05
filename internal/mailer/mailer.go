@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+
 	"repo-watch/internal/emails"
 	"repo-watch/internal/rabbitmq"
-	"strings"
 )
 
 type Deps struct {

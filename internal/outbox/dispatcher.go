@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
+
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/utils"
-	"time"
 )
 
 const (
