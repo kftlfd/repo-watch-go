@@ -135,6 +135,7 @@ func (h *handler) respondTokenError(c *gin.Context, operation string, err error)
 func (h *handler) respondInternalError(c *gin.Context, operation string, err error) {
 	if h.logger != nil {
 		h.logger.Error("request failed",
+			"request_id", requestID(c),
 			"operation", operation,
 			"method", c.Request.Method,
 			"path", c.FullPath(),
