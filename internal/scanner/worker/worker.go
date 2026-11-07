@@ -68,7 +68,7 @@ func NewScannerWorker(d Deps) *scannerWorker {
 	}
 }
 
-func (w *scannerWorker) Start(ctx context.Context) {
+func (w *scannerWorker) Start(ctx context.Context) error {
 	w.logger.Info("starting")
 
 	for {
@@ -79,7 +79,7 @@ func (w *scannerWorker) Start(ctx context.Context) {
 
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-time.After(w.cfg.Interval):
 		}
 	}
