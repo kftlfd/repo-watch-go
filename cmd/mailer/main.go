@@ -1,18 +1,13 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/signal"
-	"sync"
-	"syscall"
-	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"repo-watch/internal/app"
 	"repo-watch/internal/logger"
 	"repo-watch/internal/mailer"
 	"repo-watch/internal/rabbitmq"
@@ -23,29 +18,10 @@ func main() {
 
 	logger := logger.NewLogger("service", "mailer")
 
-	err := run(logger)
-
-	if err != nil {
-		logger.Error("exited with error", "error", err)
-		os.Exit(1)
-	}
+	app.Run(logger, run)
 }
 
-func run(logger *slog.Logger) error {
-	logger.Info("starting up")
-
-	ctx, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
-
-	signalCtx, signalStop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer signalStop()
-
-	go func() {
-		<-signalCtx.Done()
-		cancel(context.Canceled)
-		signalStop()
-	}()
-
+func run(g *app.Group, logger *slog.Logger) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -54,7 +30,8 @@ func run(logger *slog.Logger) error {
 	metricsReg := prometheus.NewRegistry()
 	rabbitMetrics := rabbitmq.NewMetrics(metricsReg)
 
-	logger.Info("connecting to rabbitmq")
+	logger.Info("preparing rabbitmq")
+
 	rabbit, err := rabbitmq.Connect(rabbitmq.ClientConfig{
 		URL:     cfg.RabbitMQUrl,
 		Logger:  logger,
@@ -63,7 +40,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("connect rabbitmq: %w", err)
 	}
-	defer rabbit.Close()
+	g.Cleanup(func() { _ = rabbit.Close() })
 
 	rabbitConsumer, err := rabbitmq.NewConsumer(rabbit, logger, rabbitMetrics)
 	if err != nil {
@@ -80,42 +57,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("create mailer worker: %w", err)
 	}
 
-	var wg sync.WaitGroup
-
-	runWorker := func(name string, fn func(context.Context) error) {
-		wg.Go(func() {
-			if err := fn(ctx); err != nil && ctx.Err() == nil {
-				logger.Error("worker failed", "worker", name, "error", err)
-				cancel(fmt.Errorf("%s: %w", name, err))
-			}
-		})
-	}
-
-	runWorker("mailer", mailerWorker.Start)
-
-	logger.Info("all components initiated")
-
-	allDone := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(allDone)
-	}()
-
-	<-ctx.Done()
-
-	logger.Info("shutting down")
-
-	select {
-	case <-time.After(10 * time.Second):
-		return fmt.Errorf("shutdown timeout")
-
-	case <-allDone:
-		logger.Info("all components stopped")
-	}
-
-	if cause := context.Cause(ctx); cause != nil && cause != context.Canceled {
-		return fmt.Errorf("ctx cause: %w", cause)
-	}
+	g.Go("mailer", mailerWorker.Start)
 
 	return nil
 }
