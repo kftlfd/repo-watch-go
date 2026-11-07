@@ -2,11 +2,20 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	requestIDHeader = "X-Request-ID"
+	requestIDKey    = "request_id"
 )
 
 type subsService interface {
@@ -48,11 +57,19 @@ func observabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 		path := c.FullPath()
 		query := c.Request.URL.RawQuery
 
+		requestID := strings.TrimSpace(c.GetHeader(requestIDHeader))
+		if requestID == "" {
+			requestID = newRequestID()
+		}
+		c.Set(requestIDKey, requestID)
+		c.Header(requestIDHeader, requestID)
+
 		c.Next()
 
 		duration := time.Since(start)
 
 		attrs := []any{
+			slog.String("request_id", requestID),
 			slog.String("method", c.Request.Method),
 			slog.String("path", path),
 			slog.String("query", query),
@@ -70,6 +87,19 @@ func observabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 
 		logger.Info("request", attrs...)
 	}
+}
+
+func requestID(c *gin.Context) string {
+	return c.GetString(requestIDKey)
+}
+
+func newRequestID() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+
+	return hex.EncodeToString(buf[:])
 }
 
 func registerApiRoutes(rg *gin.RouterGroup, h *handler) {

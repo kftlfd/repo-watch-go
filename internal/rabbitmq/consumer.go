@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"repo-watch/internal/utils"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
+
+	"repo-watch/internal/utils"
 )
 
 type RabbitJSONConsumer interface {

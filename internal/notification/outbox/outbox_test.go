@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"repo-watch/internal/emails"
 	"repo-watch/internal/notification/database"
 	"repo-watch/internal/rabbitmq"
-
-	"github.com/stretchr/testify/require"
 )
 
 func TestGetPayloadRepoRemoved(t *testing.T) {

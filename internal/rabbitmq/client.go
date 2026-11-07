@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"repo-watch/internal/utils"
 	"sync"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
+
+	"repo-watch/internal/utils"
 )
 
 type Client interface {

@@ -19,6 +19,8 @@ CREATE TABLE releases (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE INDEX releases_created_at_idx ON releases (created_at);
+
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -40,10 +42,18 @@ WHERE
     published_at IS NULL
     AND failed_at IS NULL;
 
+CREATE INDEX outbox_published_at_idx ON outbox (published_at)
+WHERE
+    published_at IS NOT NULL;
+
 -- +goose Down
+DROP INDEX IF EXISTS outbox_published_at_idx;
+
 DROP INDEX IF EXISTS outbox_retryable_idx;
 
 DROP INDEX IF EXISTS outbox_unpublished_idx;
+
+DROP INDEX IF EXISTS releases_created_at_idx;
 
 DROP TABLE IF EXISTS outbox;
 

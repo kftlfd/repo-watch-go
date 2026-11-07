@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
+
 	"repo-watch/internal/emails"
 	"repo-watch/internal/github"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/database"
-	"time"
 )
 
 var (
@@ -157,7 +158,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 	t, err := qtx.FindTokenWDate(ctx, database.FindTokenWDateParams{
 		TokenType: TokenTypeConfirm,
 		TokenVal:  token,
-		CreatedAt: time.Now().Add(-time.Hour),
+		CreatedAt: time.Now().Add(-ConfirmTokenValidity),
 	})
 	if err != nil {
 		return err

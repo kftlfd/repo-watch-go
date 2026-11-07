@@ -6,19 +6,22 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+
 	"repo-watch/internal/emails"
 	"repo-watch/internal/rabbitmq"
-	"strings"
 )
 
 type Deps struct {
 	Logger         *slog.Logger
 	RabbitConsumer rabbitmq.RabbitJSONConsumer
+	EmailMetrics   EmailMetricsRecorder
 }
 
 type mailerWorker struct {
 	logger   *slog.Logger
 	consumer rabbitmq.RabbitJSONConsumer
+	metrics  EmailMetricsRecorder
 }
 
 func NewMailer(d Deps) (*mailerWorker, error) {
@@ -28,10 +31,14 @@ func NewMailer(d Deps) (*mailerWorker, error) {
 	if d.Logger == nil {
 		return nil, fmt.Errorf("missing logger")
 	}
+	if d.EmailMetrics == nil {
+		d.EmailMetrics = noopEmailMetrics{}
+	}
 
 	return &mailerWorker{
 		logger:   d.Logger.With("module", "mailer_worker"),
 		consumer: d.RabbitConsumer,
+		metrics:  d.EmailMetrics,
 	}, nil
 }
 
@@ -46,16 +53,20 @@ func (m *mailerWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, err
 	case rabbitmq.EventEmailQueued:
 		var ev rabbitmq.EventEmailQueuedPayload
 		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
+			m.metrics.Failed("invalid_payload")
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid JSON payload: %w", err)
 		}
 		email, err := renderEmail(ev)
 		if err != nil {
+			m.metrics.Failed(ev.Type)
 			return rabbitmq.NackDiscard, err
 		}
 		printEmail(ev.Recipient, email)
+		m.metrics.Rendered(ev.Type)
 		return rabbitmq.Ack, nil
 
 	default:
+		m.metrics.Failed("unknown_event")
 		return rabbitmq.NackDiscard, fmt.Errorf("unexpected event type %q", msg.EventType)
 
 	}

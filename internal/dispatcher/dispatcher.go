@@ -1,4 +1,4 @@
-package outbox
+package dispatcher
 
 import (
 	"context"
@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
+
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/utils"
-	"time"
 )
 
 const (
@@ -42,6 +43,13 @@ type Failure struct {
 	Terminal bool
 }
 
+// PendingStats describes the unpublished, non-failed rows still waiting for
+// delivery. Oldest is zero when the outbox is empty.
+type PendingStats struct {
+	Count  int64
+	Oldest time.Time
+}
+
 type Store interface {
 	GetNextBatch(ctx context.Context, batchSize int32, leaseUntil time.Time) ([]Row, error)
 	MarkPublished(ctx context.Context, ids []int32) error
@@ -52,6 +60,7 @@ type Store interface {
 		terminal bool,
 		maxAttempts int32,
 	) (Failure, error)
+	PendingStats(ctx context.Context) (PendingStats, error)
 }
 
 type DispatcherConfig struct {
@@ -232,6 +241,8 @@ func (d *Dispatcher) runIteration(ctx context.Context) (processed int, err error
 	ctx, cancel := context.WithTimeout(ctx, d.cfg.loopIterationTimeout)
 	defer cancel()
 
+	d.recordPendingStats(ctx)
+
 	leaseDeadline := d.now().Add(d.cfg.leaseDuration)
 	batch, err := d.store.GetNextBatch(ctx, d.cfg.batchSize, leaseDeadline)
 	if err != nil {
@@ -291,6 +302,26 @@ func (d *Dispatcher) runIteration(ctx context.Context) (processed int, err error
 	return processed, errors.Join(errs...)
 }
 
+func (d *Dispatcher) recordPendingStats(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	stats, err := d.store.PendingStats(ctx)
+	if err != nil {
+		d.logger.Warn("outbox stats query failed", "error", err)
+		return
+	}
+
+	d.metrics.SetPending(stats.Count)
+
+	var age time.Duration
+	if stats.Count > 0 && !stats.Oldest.IsZero() {
+		age = max(d.now().Sub(stats.Oldest), 0)
+	}
+	d.metrics.SetOldestAge(age)
+}
+
 func (d *Dispatcher) publishWithRetry(
 	ctx context.Context,
 	leaseDeadline time.Time,
@@ -307,7 +338,9 @@ func (d *Dispatcher) publishWithRetry(
 				"outbox row %d: lease expired before publish: %w", row.ID, lastErr)
 		}
 
-		publishCtx, cancel := context.WithDeadline(ctx, leaseDeadline)
+		// Detach from shutdown cancellation so an in-flight publisher confirm
+		// can finish; the lease deadline keeps the wait bounded.
+		publishCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), leaseDeadline)
 		err = d.pub.PublishJSON(publishCtx, rabbitmq.EnvelopeJSON{
 			EventID:   row.EventID,
 			EventType: row.EventType,

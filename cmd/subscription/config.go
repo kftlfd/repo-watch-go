@@ -2,53 +2,54 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+
+	"repo-watch/internal/logger"
 	"repo-watch/internal/postgres"
-	"repo-watch/internal/subscription/outbox"
+	"repo-watch/internal/utils"
 )
 
 type Config struct {
-	IsDev     bool
-	PortAPI   string
-	PortAdmin string
-
-	DbBaseUrl string
-	DbUrl     string
-	DbName    string
-
+	LogLevel    slog.Level
+	IsDev       bool
+	PortAPI     string
+	PortAdmin   string
+	DbBaseUrl   string
+	DbUrl       string
+	DbName      string
 	RabbitMQUrl string
-
-	OutboxCfg outbox.Config
-
 	GhApiUrl    string
 	GithubToken string
 }
 
-func loadConfig() (Config, error) {
-	cfg := Config{
+func loadConfig() *Config {
+	return &Config{
+		LogLevel: logger.ParseLevel(os.Getenv("LOG_LEVEL")),
+
 		IsDev:     os.Getenv("ENV") == "dev",
-		PortAPI:   "9010",
-		PortAdmin: "9011",
+		PortAPI:   utils.Env("PORT", "3000"),
+		PortAdmin: utils.Env("PORT_ADMIN", "4000"),
 
 		DbBaseUrl: os.Getenv("POSTGRES_URL"),
-		DbName:    "subscription_db",
+		DbName:    utils.Env("DB_NAME", "subscription_db"),
 
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
 
-		OutboxCfg: outbox.Config{},
-
-		GhApiUrl:    os.Getenv("GH_API_URL"),
+		GhApiUrl:    utils.Env("GH_API_URL", "https://api.github.com"),
 		GithubToken: os.Getenv("GITHUB_TOKEN"),
 	}
+}
 
+func (cfg *Config) validateConfig() error {
 	if cfg.DbBaseUrl == "" {
-		return cfg, fmt.Errorf("no POSTGRES_URL")
+		return fmt.Errorf("no POSTGRES_URL")
 	}
 	cfg.DbUrl = postgres.CreateDbUrl(cfg.DbBaseUrl, cfg.DbName)
 
 	if cfg.RabbitMQUrl == "" {
-		return cfg, fmt.Errorf("no RABBITMQ_URL")
+		return fmt.Errorf("no RABBITMQ_URL")
 	}
 
-	return cfg, nil
+	return nil
 }

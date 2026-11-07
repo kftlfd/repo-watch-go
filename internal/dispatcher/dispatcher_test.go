@@ -1,4 +1,4 @@
-package outbox
+package dispatcher
 
 import (
 	"context"
@@ -11,14 +11,17 @@ import (
 	"testing"
 	"time"
 
-	"repo-watch/internal/rabbitmq"
-
 	"github.com/stretchr/testify/require"
+
+	"repo-watch/internal/rabbitmq"
 )
 
 type fakeStore struct {
 	rows   []Row
 	getErr error
+
+	pendingStats PendingStats
+	pendingErr   error
 
 	getCalls         int
 	markPublishedIDs []int32
@@ -50,6 +53,10 @@ func (s *fakeStore) GetNextBatch(ctx context.Context, batchSize int32, leasedUnt
 func (s *fakeStore) MarkPublished(ctx context.Context, ids []int32) error {
 	s.markPublishedIDs = append(s.markPublishedIDs, ids...)
 	return s.markPublishedErr
+}
+
+func (s *fakeStore) PendingStats(context.Context) (PendingStats, error) {
+	return s.pendingStats, s.pendingErr
 }
 
 func (s *fakeStore) RecordFailure(
@@ -88,14 +95,14 @@ type fakePublisher struct {
 	calls     []rabbitmq.EnvelopeJSON
 	errs      []error
 	alwaysErr error
-	onPublish func()
+	onPublish func(context.Context)
 }
 
 func (p *fakePublisher) PublishJSON(ctx context.Context, msg rabbitmq.EnvelopeJSON) error {
 	idx := len(p.calls)
 	p.calls = append(p.calls, msg)
 	if p.onPublish != nil {
-		p.onPublish()
+		p.onPublish(ctx)
 	}
 	if p.alwaysErr != nil {
 		return p.alwaysErr
@@ -111,12 +118,20 @@ type fakeMetrics struct {
 	retries      int
 	deadLettered int
 	unavailable  int
+	pending      int64
+	oldestAge    time.Duration
 }
 
 func (m *fakeMetrics) Published(count int) { m.published += count }
 func (m *fakeMetrics) Retry()              { m.retries++ }
 func (m *fakeMetrics) DeadLettered()       { m.deadLettered++ }
 func (m *fakeMetrics) Unavailable()        { m.unavailable++ }
+func (m *fakeMetrics) SetPending(count int64) {
+	m.pending = count
+}
+func (m *fakeMetrics) SetOldestAge(age time.Duration) {
+	m.oldestAge = age
+}
 
 func ptr[T any](v T) *T {
 	return &v
@@ -329,7 +344,7 @@ func TestRunIterationStopsRetryingAfterLeaseExpiry(t *testing.T) {
 			return nil
 		}),
 	)
-	pub.onPublish = func() {
+	pub.onPublish = func(context.Context) {
 		now = now.Add(2 * time.Second)
 	}
 
@@ -456,6 +471,76 @@ func TestRunIterationDeadLettersAfterAttemptLimit(t *testing.T) {
 	require.True(t, store.failures[1].Result.Terminal)
 	require.Equal(t, 1, metrics.retries)
 	require.Equal(t, 1, metrics.deadLettered)
+}
+
+func TestRunIterationRecordsPendingStats(t *testing.T) {
+	now := time.Now()
+	store := &fakeStore{
+		pendingStats: PendingStats{
+			Count:  4,
+			Oldest: now.Add(-90 * time.Second),
+		},
+	}
+	metrics := &fakeMetrics{}
+	d := newTestDispatcher(t, store, &fakePublisher{}, testConfig(), metrics,
+		withNow(func() time.Time { return now }),
+	)
+
+	_, err := d.runIteration(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(4), metrics.pending)
+	require.Equal(t, 90*time.Second, metrics.oldestAge)
+}
+
+func TestPendingStatsFailureDoesNotStopPublishing(t *testing.T) {
+	store := &fakeStore{
+		rows:       []Row{testRow(1)},
+		pendingErr: errors.New("stats unavailable"),
+	}
+	metrics := &fakeMetrics{}
+	d := newTestDispatcher(t, store, &fakePublisher{}, testConfig(), metrics)
+
+	processed, err := d.runIteration(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	require.Equal(t, []int32{1}, store.markPublishedIDs)
+}
+
+type blockingPublisher struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingPublisher) PublishJSON(ctx context.Context, _ rabbitmq.EnvelopeJSON) error {
+	close(p.started)
+	<-p.release
+
+	// The dispatcher must detach an in-flight confirmation from shutdown
+	// cancellation, otherwise this context would already be canceled.
+	return ctx.Err()
+}
+
+func TestRunIterationWaitsForInFlightPublisherConfirm(t *testing.T) {
+	store := &fakeStore{rows: []Row{testRow(1)}}
+	pub := &blockingPublisher{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	d := newTestDispatcher(t, store, pub, testConfig(), &fakeMetrics{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.runIteration(ctx)
+		done <- err
+	}()
+
+	<-pub.started
+	cancel()
+	close(pub.release)
+
+	require.NoError(t, <-done)
+	require.Equal(t, []int32{1}, store.markPublishedIDs)
 }
 
 func TestRunLoopRetriesTransientErrorsWithBackoff(t *testing.T) {

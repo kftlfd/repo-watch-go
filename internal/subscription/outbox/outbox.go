@@ -5,14 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
-	"repo-watch/internal/outbox"
-	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/subscription/database"
 	"slices"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
+	"repo-watch/internal/dispatcher"
+	"repo-watch/internal/rabbitmq"
+	"repo-watch/internal/subscription/database"
 )
 
 var validEventTypes = []string{
@@ -36,7 +34,11 @@ type subscriptionOutbox struct {
 	q *database.Queries
 }
 
-func (s *subscriptionOutbox) GetNextBatch(ctx context.Context, batchSize int32, leasedUntil time.Time) ([]outbox.Row, error) {
+func NewSubsctiptionOutbox(queries *database.Queries) dispatcher.Store {
+	return &subscriptionOutbox{q: queries}
+}
+
+func (s *subscriptionOutbox) GetNextBatch(ctx context.Context, batchSize int32, leasedUntil time.Time) ([]dispatcher.Row, error) {
 	res, err := s.q.GetOutboxBatch(ctx, database.GetOutboxBatchParams{
 		Limit: batchSize,
 		LeasedUntil: sql.NullTime{
@@ -48,9 +50,9 @@ func (s *subscriptionOutbox) GetNextBatch(ctx context.Context, batchSize int32, 
 		return nil, err
 	}
 
-	out := make([]outbox.Row, len(res))
+	out := make([]dispatcher.Row, len(res))
 	for i, row := range res {
-		out[i] = outbox.Row{
+		out[i] = dispatcher.Row{
 			ID:            row.ID,
 			EventType:     row.EventType,
 			EventID:       getEventID(row.ID),
@@ -74,7 +76,7 @@ func (s *subscriptionOutbox) RecordFailure(
 	lastError string,
 	terminal bool,
 	maxAttempts int32,
-) (outbox.Failure, error) {
+) (dispatcher.Failure, error) {
 	res, err := s.q.RecordOutboxFailure(ctx, database.RecordOutboxFailureParams{
 		ID:          id,
 		LastError:   lastError,
@@ -82,42 +84,26 @@ func (s *subscriptionOutbox) RecordFailure(
 		MaxAttempts: maxAttempts,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return outbox.Failure{Terminal: true}, nil
+		return dispatcher.Failure{Terminal: true}, nil
 	}
 	if err != nil {
-		return outbox.Failure{}, err
+		return dispatcher.Failure{}, err
 	}
 
-	return outbox.Failure{
+	return dispatcher.Failure{
 		Attempts: res.Attempts,
 		Terminal: res.FailedAt.Valid,
 	}, nil
 }
 
-func NewMetrics(reg prometheus.Registerer) *outbox.Metrics {
-	return outbox.NewMetrics(reg)
-}
-
-type Config outbox.DispatcherConfig
-
-type Deps struct {
-	Cfg     Config
-	Logger  *slog.Logger
-	Pub     rabbitmq.RabbitJSONPublisher
-	Metrics outbox.MetricsRecorder
-	Queries *database.Queries
-}
-
-func NewDispatcher(d Deps) (*outbox.Dispatcher, error) {
-	store := &subscriptionOutbox{q: d.Queries}
-
-	ddeps := outbox.DispatcherDeps{
-		Config:    outbox.DispatcherConfig(d.Cfg),
-		Logger:    d.Logger.With("module", "subscription_outbox"),
-		Publisher: d.Pub,
-		Store:     store,
-		Metrics:   d.Metrics,
+func (s *subscriptionOutbox) PendingStats(ctx context.Context) (dispatcher.PendingStats, error) {
+	row, err := s.q.GetOutboxPendingStats(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return dispatcher.PendingStats{}, nil
+		}
+		return dispatcher.PendingStats{}, err
 	}
 
-	return outbox.NewDispatcher(ddeps)
+	return dispatcher.PendingStats{Count: row.Pending, Oldest: row.OldestCreatedAt}, nil
 }

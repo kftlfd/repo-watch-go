@@ -4,18 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"repo-watch/internal/github"
-	"repo-watch/internal/postgres"
-	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/subscription/database"
-	"repo-watch/internal/subscription/database/migrations"
-	"repo-watch/internal/subscription/subs"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	pg "github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"repo-watch/internal/github"
+	"repo-watch/internal/postgres"
+	"repo-watch/internal/rabbitmq"
+	"repo-watch/internal/subscription/database"
+	"repo-watch/internal/subscription/database/migrations"
+	"repo-watch/internal/subscription/subs"
 )
 
 type testDB struct {

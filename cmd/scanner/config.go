@@ -2,28 +2,26 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
-	"repo-watch/internal/postgres"
-	"repo-watch/internal/scanner/outbox"
-	"repo-watch/internal/scanner/worker"
 	"time"
+
+	"repo-watch/internal/logger"
+	"repo-watch/internal/postgres"
+	"repo-watch/internal/scanner/worker"
+	"repo-watch/internal/utils"
 )
 
 type Config struct {
-	IsDev     bool
-	PortAdmin string
-
-	DbBaseUrl string
-	DbUrl     string
-	DbName    string
-
+	LogLevel    slog.Level
+	IsDev       bool
+	PortAdmin   string
+	DbBaseUrl   string
+	DbUrl       string
+	DbName      string
 	RabbitMQUrl string
-
-	ScannerCfg worker.Config
-	OutboxCfg  outbox.Config
-
+	ScannerCfg  worker.Config
 	Concurrency ConcurrencyCfg
-
 	GhApiUrl    string
 	GithubToken string
 }
@@ -32,13 +30,15 @@ type ConcurrencyCfg struct {
 	ScannerWorkers int
 }
 
-func loadConfig() (Config, error) {
-	cfg := Config{
+func loadConfig() *Config {
+	return &Config{
+		LogLevel: logger.ParseLevel(os.Getenv("LOG_LEVEL")),
+
 		IsDev:     os.Getenv("ENV") == "dev",
-		PortAdmin: "9021",
+		PortAdmin: utils.Env("PORT_ADMIN", "4000"),
 
 		DbBaseUrl: os.Getenv("POSTGRES_URL"),
-		DbName:    "scanner_db",
+		DbName:    utils.Env("DB_NAME", "scanner_db"),
 
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
 
@@ -52,8 +52,6 @@ func loadConfig() (Config, error) {
 			GithubRetryBase:   500 * time.Millisecond,
 		},
 
-		OutboxCfg: outbox.Config{},
-
 		Concurrency: ConcurrencyCfg{
 			ScannerWorkers: 1,
 		},
@@ -61,15 +59,17 @@ func loadConfig() (Config, error) {
 		GhApiUrl:    os.Getenv("GH_API_URL"),
 		GithubToken: os.Getenv("GITHUB_TOKEN"),
 	}
+}
 
+func (cfg *Config) validateConfig() error {
 	if cfg.DbBaseUrl == "" {
-		return cfg, fmt.Errorf("no POSTGRES_URL")
+		return fmt.Errorf("no POSTGRES_URL")
 	}
 	cfg.DbUrl = postgres.CreateDbUrl(cfg.DbBaseUrl, cfg.DbName)
 
 	if cfg.RabbitMQUrl == "" {
-		return cfg, fmt.Errorf("no RABBITMQ_URL")
+		return fmt.Errorf("no RABBITMQ_URL")
 	}
 
-	return cfg, nil
+	return nil
 }

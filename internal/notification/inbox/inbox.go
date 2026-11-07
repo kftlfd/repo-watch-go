@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+
 	"repo-watch/internal/notification/database"
 	"repo-watch/internal/notification/outbox"
 	"repo-watch/internal/rabbitmq"
