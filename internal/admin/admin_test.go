@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,7 @@ import (
 func TestReadyReportsDependencyFailure(t *testing.T) {
 	handler := NewHandler(Deps{
 		Metrics: prometheus.NewRegistry(),
-		Ready: func() error {
+		Ready: func(context.Context) error {
 			return errors.New("rabbitmq is not connected")
 		},
 	})

@@ -7,7 +7,10 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"repo-watch/internal/admin"
+	"repo-watch/internal/admin/ready"
 	"repo-watch/internal/app"
+	"repo-watch/internal/httpserver"
 	"repo-watch/internal/logger"
 	"repo-watch/internal/mailer"
 	"repo-watch/internal/rabbitmq"
@@ -57,6 +60,16 @@ func run(g *app.Group, logger *slog.Logger) error {
 		return fmt.Errorf("create mailer worker: %w", err)
 	}
 
+	adminServer := httpserver.NewServer(httpserver.ServerDeps{
+		Logger: logger.With("module", "admin_server"),
+		Handler: admin.NewHandler(admin.Deps{
+			Metrics: metricsReg,
+			Ready:   ready.All(ready.Func("rabbitmq", rabbit.Ready)),
+		}),
+		Port: cfg.PortAdmin,
+	})
+
+	g.Go("admin server", adminServer.Start)
 	g.Go("mailer", mailerWorker.Start)
 
 	return nil

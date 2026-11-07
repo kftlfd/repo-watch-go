@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -13,7 +14,7 @@ type Deps struct {
 	// Ready must return nil when the service can serve traffic. A nil Ready
 	// check keeps the endpoint unconditionally ready, which is useful for
 	// services without external dependencies.
-	Ready func() error
+	Ready func(context.Context) error
 }
 
 func NewHandler(d Deps) http.Handler {
@@ -26,7 +27,7 @@ func NewHandler(d Deps) http.Handler {
 
 	g.GET("/ready", func(c *gin.Context) {
 		if d.Ready != nil {
-			if err := d.Ready(); err != nil {
+			if err := d.Ready(c.Request.Context()); err != nil {
 				c.JSON(http.StatusServiceUnavailable, gin.H{
 					"status": "not ready",
 					"error":  err.Error(),

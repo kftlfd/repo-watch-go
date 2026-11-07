@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"repo-watch/internal/admin"
+	"repo-watch/internal/admin/ready"
 	"repo-watch/internal/app"
 	"repo-watch/internal/dispatcher"
 	"repo-watch/internal/github"
@@ -134,7 +135,10 @@ func run(g *app.Group, logger *slog.Logger) error {
 		Logger: logger.With("module", "admin_server"),
 		Handler: admin.NewHandler(admin.Deps{
 			Metrics: metricsReg,
-			Ready:   rabbit.Ready,
+			Ready: ready.All(
+				ready.Database(db),
+				ready.Func("rabbitmq", rabbit.Ready),
+			),
 		}),
 	})
 
