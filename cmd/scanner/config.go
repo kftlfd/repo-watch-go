@@ -9,6 +9,7 @@ import (
 	"repo-watch/internal/logger"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/scanner/worker"
+	"repo-watch/internal/utils"
 )
 
 type Config struct {
@@ -34,10 +35,10 @@ func loadConfig() *Config {
 		LogLevel: logger.ParseLevel(os.Getenv("LOG_LEVEL")),
 
 		IsDev:     os.Getenv("ENV") == "dev",
-		PortAdmin: "9021",
+		PortAdmin: utils.Env("PORT_ADMIN", "4000"),
 
 		DbBaseUrl: os.Getenv("POSTGRES_URL"),
-		DbName:    "scanner_db",
+		DbName:    utils.Env("DB_NAME", "scanner_db"),
 
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
 

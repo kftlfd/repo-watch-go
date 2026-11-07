@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"repo-watch/internal/logger"
+	"repo-watch/internal/utils"
 )
 
 type Config struct {
@@ -16,7 +17,7 @@ type Config struct {
 func loadConfig() *Config {
 	return &Config{
 		LogLevel:    logger.ParseLevel(os.Getenv("LOG_LEVEL")),
-		PortAdmin:   "9041",
+		PortAdmin:   utils.Env("PORT_ADMIN", "4000"),
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
 	}
 }

@@ -7,6 +7,7 @@ import (
 
 	"repo-watch/internal/logger"
 	"repo-watch/internal/postgres"
+	"repo-watch/internal/utils"
 )
 
 type Config struct {
@@ -27,15 +28,15 @@ func loadConfig() *Config {
 		LogLevel: logger.ParseLevel(os.Getenv("LOG_LEVEL")),
 
 		IsDev:     os.Getenv("ENV") == "dev",
-		PortAPI:   "9010",
-		PortAdmin: "9011",
+		PortAPI:   utils.Env("PORT", "3000"),
+		PortAdmin: utils.Env("PORT_ADMIN", "4000"),
 
 		DbBaseUrl: os.Getenv("POSTGRES_URL"),
-		DbName:    "subscription_db",
+		DbName:    utils.Env("DB_NAME", "subscription_db"),
 
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
 
-		GhApiUrl:    os.Getenv("GH_API_URL"),
+		GhApiUrl:    utils.Env("GH_API_URL", "https://api.github.com"),
 		GithubToken: os.Getenv("GITHUB_TOKEN"),
 	}
 }
