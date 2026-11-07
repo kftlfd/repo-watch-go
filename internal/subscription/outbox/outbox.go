@@ -95,3 +95,15 @@ func (s *subscriptionOutbox) RecordFailure(
 		Terminal: res.FailedAt.Valid,
 	}, nil
 }
+
+func (s *subscriptionOutbox) PendingStats(ctx context.Context) (dispatcher.PendingStats, error) {
+	row, err := s.q.GetOutboxPendingStats(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return dispatcher.PendingStats{}, nil
+		}
+		return dispatcher.PendingStats{}, err
+	}
+
+	return dispatcher.PendingStats{Count: row.Pending, Oldest: row.OldestCreatedAt}, nil
+}

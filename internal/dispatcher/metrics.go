@@ -1,12 +1,18 @@
 package dispatcher
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 type MetricsRecorder interface {
 	Published(count int)
 	Retry()
 	DeadLettered()
 	Unavailable()
+	SetPending(count int64)
+	SetOldestAge(age time.Duration)
 }
 
 type Metrics struct {
@@ -14,6 +20,8 @@ type Metrics struct {
 	retries      prometheus.Counter
 	deadLettered prometheus.Counter
 	unavailable  prometheus.Counter
+	pending      prometheus.Gauge
+	oldestAge    prometheus.Gauge
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -34,9 +42,24 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "outbox_publish_unavailable_total",
 			Help: "Total number of outbox publish attempts skipped because RabbitMQ was unavailable.",
 		}),
+		pending: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "outbox_pending_events",
+			Help: "Current number of unpublished, non-failed outbox rows.",
+		}),
+		oldestAge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "outbox_oldest_pending_age_seconds",
+			Help: "Age in seconds of the oldest unpublished, non-failed outbox row; 0 when empty.",
+		}),
 	}
 
-	reg.MustRegister(m.published, m.retries, m.deadLettered, m.unavailable)
+	reg.MustRegister(
+		m.published,
+		m.retries,
+		m.deadLettered,
+		m.unavailable,
+		m.pending,
+		m.oldestAge,
+	)
 
 	return m
 }
@@ -59,9 +82,20 @@ func (m *Metrics) Unavailable() {
 	m.unavailable.Inc()
 }
 
+func (m *Metrics) SetPending(count int64) {
+	m.pending.Set(float64(count))
+}
+
+func (m *Metrics) SetOldestAge(age time.Duration) {
+	age = max(age, 0)
+	m.oldestAge.Set(age.Seconds())
+}
+
 type noopMetrics struct{}
 
-func (noopMetrics) Published(int) {}
-func (noopMetrics) Retry()        {}
-func (noopMetrics) DeadLettered() {}
-func (noopMetrics) Unavailable()  {}
+func (noopMetrics) Published(int)              {}
+func (noopMetrics) Retry()                     {}
+func (noopMetrics) DeadLettered()              {}
+func (noopMetrics) Unavailable()               {}
+func (noopMetrics) SetPending(int64)           {}
+func (noopMetrics) SetOldestAge(time.Duration) {}
