@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"repo-watch/internal/utils"
 	"time"
+
+	"repo-watch/internal/utils"
 )
 
 type Task struct {

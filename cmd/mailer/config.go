@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+
 	"repo-watch/internal/logger"
 	"repo-watch/internal/utils"
 )

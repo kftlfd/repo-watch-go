@@ -2,9 +2,10 @@ package cleanup
 
 import (
 	"context"
+	"time"
+
 	"repo-watch/internal/notification/database"
 	"repo-watch/internal/taskrunner"
-	"time"
 )
 
 const (
