@@ -158,7 +158,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 	t, err := qtx.FindTokenWDate(ctx, database.FindTokenWDateParams{
 		TokenType: TokenTypeConfirm,
 		TokenVal:  token,
-		CreatedAt: time.Now().Add(-time.Hour),
+		CreatedAt: time.Now().Add(-ConfirmTokenValidity),
 	})
 	if err != nil {
 		return err

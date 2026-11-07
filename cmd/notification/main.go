@@ -18,12 +18,14 @@ import (
 	"repo-watch/internal/dispatcher"
 	"repo-watch/internal/httpserver"
 	"repo-watch/internal/logger"
+	"repo-watch/internal/notification/cleanup"
 	"repo-watch/internal/notification/database"
 	"repo-watch/internal/notification/database/migrations"
 	"repo-watch/internal/notification/inbox"
 	"repo-watch/internal/notification/outbox"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
+	"repo-watch/internal/taskrunner"
 )
 
 func main() {
@@ -111,6 +113,13 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("create inbox worker: %w", err)
 	}
 
+	cleanupJob := taskrunner.CreateTaskRunner(
+		logger.With("module", "cleanup"),
+		cleanup.CreateCleanupTasks(queries, time.Now),
+		time.Hour,
+		time.Minute,
+	)
+
 	dlqMonitor, err := rabbitmq.NewDLQMonitor(rabbitmq.DLQMonitorDeps{
 		Client:  rabbit,
 		Logger:  logger,
@@ -159,6 +168,7 @@ func run(logger *slog.Logger) error {
 
 	runWorker("outbox dispatcher", outboxDispatcher.Start)
 	runWorker("inbox", inboxWorker.Start)
+	runWorker("cleanup", cleanupJob)
 	runWorker("dlq monitor", dlqMonitor.Start)
 
 	logger.Info("all components initiated")

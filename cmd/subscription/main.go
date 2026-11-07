@@ -22,11 +22,13 @@ import (
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/api"
+	"repo-watch/internal/subscription/cleanup"
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/database/migrations"
 	"repo-watch/internal/subscription/inbox"
 	"repo-watch/internal/subscription/outbox"
 	"repo-watch/internal/subscription/subs"
+	"repo-watch/internal/taskrunner"
 )
 
 func main() {
@@ -138,6 +140,13 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("create inbox worker: %w", err)
 	}
 
+	cleanupJob := taskrunner.CreateTaskRunner(
+		logger.With("module", "cleanup"),
+		cleanup.CreateCleanupTasks(queries, time.Now),
+		time.Hour,
+		time.Minute,
+	)
+
 	if !cfg.IsDev {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -167,6 +176,7 @@ func run(logger *slog.Logger) error {
 
 	runWorker("outbox dispatcher", outboxDispatcher.Start)
 	runWorker("inbox", inboxWorker.Start)
+	runWorker("cleanup", cleanupJob)
 
 	wg.Go(func() {
 		apiLogger := logger.With("module", "api_server")

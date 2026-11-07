@@ -21,11 +21,13 @@ import (
 	"repo-watch/internal/logger"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
+	"repo-watch/internal/scanner/cleanup"
 	"repo-watch/internal/scanner/database"
 	"repo-watch/internal/scanner/database/migrations"
 	"repo-watch/internal/scanner/inbox"
 	"repo-watch/internal/scanner/outbox"
 	"repo-watch/internal/scanner/worker"
+	"repo-watch/internal/taskrunner"
 )
 
 func main() {
@@ -120,6 +122,13 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("create inbox worker: %w", err)
 	}
 
+	cleanupJob := taskrunner.CreateTaskRunner(
+		logger.With("module", "cleanup"),
+		cleanup.CreateCleanupTasks(queries, time.Now),
+		time.Hour,
+		time.Minute,
+	)
+
 	scannerWorker := worker.NewScannerWorker(worker.Deps{
 		Cfg:          cfg.ScannerCfg,
 		Logger:       logger,
@@ -169,6 +178,7 @@ func run(logger *slog.Logger) error {
 
 	runWorker("outbox dispatcher", outboxDispatcher.Start)
 	runWorker("inbox", inboxWorker.Start)
+	runWorker("cleanup", cleanupJob)
 
 	for range cfg.Concurrency.ScannerWorkers {
 		wg.Go(func() {

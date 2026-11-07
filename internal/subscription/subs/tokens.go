@@ -3,11 +3,14 @@ package subs
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"time"
 )
 
 const (
 	TokenTypeConfirm = "confirm"
 	TokenTypeUnsub   = "unsub"
+
+	ConfirmTokenValidity = time.Hour
 
 	tokenBytes = 16
 )
