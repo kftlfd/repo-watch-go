@@ -53,6 +53,7 @@ services:
 
   subscription:
     <<: *app
+    image: kftlfd/repo-watch-go-subscription
     build:
       context: .
       args:
@@ -63,6 +64,7 @@ services:
     
   scanner:
     <<: *app
+    image: kftlfd/repo-watch-go-scanner
     build:
       context: .
       args:
@@ -72,6 +74,7 @@ services:
 
   notification:
     <<: *app
+    image: kftlfd/repo-watch-go-notification
     build:
       context: .
       args:
@@ -81,6 +84,7 @@ services:
 
   mailer:
     <<: *app
+    image: kftlfd/repo-watch-go-mailer
     build:
       context: .
       args:
