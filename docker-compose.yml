@@ -6,10 +6,17 @@ x-app: &app
     rabbitmq:
       condition: service_healthy
   environment:
+    PORT_ADMIN: 4000
     POSTGRES_URL: postgres://postgres:postgres@postgres:5432
     RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
     GH_API_URL: ${GH_API_URL:-https://api.github.com}
     GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  healthcheck:
+    test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:4000/ready || exit 1"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 15s
 
 services:
   postgres:
@@ -51,15 +58,9 @@ services:
       args:
         SERVICE: subscription
     ports:
-      - "9010:9010"
-      - "9011:9011"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9011/ready || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-
+      - "3000:3000"
+      - "4010:4000"
+    
   scanner:
     <<: *app
     build:
@@ -67,13 +68,7 @@ services:
       args:
         SERVICE: scanner
     ports:
-      - "9021:9021"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9021/ready || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+      - "4020:4000"
 
   notification:
     <<: *app
@@ -82,13 +77,7 @@ services:
       args:
         SERVICE: notification
     ports:
-      - "9031:9031"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9031/ready || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+      - "4030:4000"
 
   mailer:
     <<: *app
@@ -97,13 +86,7 @@ services:
       args:
         SERVICE: mailer
     ports:
-      - "9041:9041"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9041/ready || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+      - "4040:4000"
 
 volumes:
   postgres-data:
