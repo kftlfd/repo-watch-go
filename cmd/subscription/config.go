@@ -2,28 +2,30 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
+	"repo-watch/internal/logger"
 	"repo-watch/internal/postgres"
 )
 
 type Config struct {
-	IsDev     bool
-	PortAPI   string
-	PortAdmin string
-
-	DbBaseUrl string
-	DbUrl     string
-	DbName    string
-
+	LogLevel    slog.Level
+	IsDev       bool
+	PortAPI     string
+	PortAdmin   string
+	DbBaseUrl   string
+	DbUrl       string
+	DbName      string
 	RabbitMQUrl string
-
 	GhApiUrl    string
 	GithubToken string
 }
 
-func loadConfig() (Config, error) {
-	cfg := Config{
+func loadConfig() *Config {
+	return &Config{
+		LogLevel: logger.ParseLevel(os.Getenv("LOG_LEVEL")),
+
 		IsDev:     os.Getenv("ENV") == "dev",
 		PortAPI:   "9010",
 		PortAdmin: "9011",
@@ -36,15 +38,17 @@ func loadConfig() (Config, error) {
 		GhApiUrl:    os.Getenv("GH_API_URL"),
 		GithubToken: os.Getenv("GITHUB_TOKEN"),
 	}
+}
 
+func (cfg *Config) validateConfig() error {
 	if cfg.DbBaseUrl == "" {
-		return cfg, fmt.Errorf("no POSTGRES_URL")
+		return fmt.Errorf("no POSTGRES_URL")
 	}
 	cfg.DbUrl = postgres.CreateDbUrl(cfg.DbBaseUrl, cfg.DbName)
 
 	if cfg.RabbitMQUrl == "" {
-		return cfg, fmt.Errorf("no RABBITMQ_URL")
+		return fmt.Errorf("no RABBITMQ_URL")
 	}
 
-	return cfg, nil
+	return nil
 }

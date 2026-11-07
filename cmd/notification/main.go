@@ -28,15 +28,16 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	logger := logger.NewLogger("service", "notification")
+	cfg := loadConfig()
 
-	app.Run(logger, run)
+	logger := logger.NewLogger(cfg.LogLevel, "service", "notification")
+
+	app.Run(logger, cfg.run)
 }
 
-func run(g *app.Group, logger *slog.Logger) error {
-	cfg, err := loadConfig()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
+	if err := cfg.validateConfig(); err != nil {
+		return fmt.Errorf("validate config: %w", err)
 	}
 
 	if !cfg.IsDev {
@@ -48,7 +49,7 @@ func run(g *app.Group, logger *slog.Logger) error {
 
 	logger.Info("preparing DB")
 
-	if err = postgres.EnsureDbExists(g.Ctx(), cfg.DbBaseUrl, cfg.DbName); err != nil {
+	if err := postgres.EnsureDbExists(g.Ctx(), cfg.DbBaseUrl, cfg.DbName); err != nil {
 		return fmt.Errorf("ensure DB exists: %w", err)
 	}
 	db, err := postgres.Connect(cfg.DbUrl)
