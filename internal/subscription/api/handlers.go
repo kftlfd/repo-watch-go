@@ -27,23 +27,33 @@ const (
 	msgUnsubscribed  = "unsubscribed"
 )
 
-type subscriptionResponse struct {
-	Email     string `json:"email"`
-	Repo      string `json:"repo"`
-	Confirmed bool   `json:"confirmed"`
-}
-
+// handleCreateSubscription creates a subscription for an email address and
+// GitHub repository, then queues a confirmation email
+//
+// @Summary      Create a subscription
+// @Description  Creates a pending subscription for a GitHub repository and queues a confirmation email.
+// @Tags         Subscriptions
+// @Accept       json,x-www-form-urlencoded
+// @Produce      json
+// @Param        request       body    createSubscriptionRequest  true   "Email address and GitHub repository to subscribe to"
+// @Success      200  {object}  messageResponse  "Confirmation email queued"
+// @Failure      400  {object}  errorResponse    "Malformed request body or invalid email/repository"
+// @Failure      404  {object}  errorResponse    "Repository not found on GitHub"
+// @Failure      409  {object}  errorResponse    "An active subscription already exists"
+// @Failure      413  {object}  errorResponse    "Request body exceeds the 1 MiB limit"
+// @Failure      429  {object}  errorResponse    "GitHub rate limit exceeded"
+// @Failure      500  {object}  errorResponse    "Internal server error"
+// @Failure      502  {object}  errorResponse    "GitHub upstream error"
+// @Header       all  {string}  X-Request-ID     "Request identifier (client-provided or generated)"
+// @Router       /subscribe [post]
 func (h *handler) handleCreateSubscription(c *gin.Context) {
-	req := struct {
-		Email string `json:"email" form:"email" binding:"required,email"`
-		Repo  string `json:"repo" form:"repo" binding:"required"`
-	}{}
+	req := createSubscriptionRequest{}
 	if err := c.ShouldBind(&req); err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errBodyTooLarge})
+			c.JSON(http.StatusRequestEntityTooLarge, errorResponse{Error: errBodyTooLarge})
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": errInvalidInput})
+		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidInput})
 		return
 	}
 
@@ -52,13 +62,27 @@ func (h *handler) handleCreateSubscription(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": msgCheckEmail})
+	c.JSON(http.StatusOK, messageResponse{Message: msgCheckEmail})
 }
 
+// handleConfirmSubscription activates a subscription using the token from the
+// confirmation email
+//
+// @Summary      Confirm a subscription
+// @Description  Confirms a subscription using the token from the confirmation email.
+// @Tags         Subscriptions
+// @Produce      json
+// @Param        token         path    string  true   "Confirmation token from the email"
+// @Success      200  {object}  messageResponse  "Subscription confirmed"
+// @Failure      400  {object}  errorResponse    "Malformed token"
+// @Failure      404  {object}  errorResponse    "Token not found, already used, or expired"
+// @Failure      500  {object}  errorResponse    "Internal server error"
+// @Header       all  {string}  X-Request-ID     "Request identifier (client-provided or generated)"
+// @Router       /confirm/{token} [post]
 func (h *handler) handleConfirmSubscription(c *gin.Context) {
 	token := c.Param("token")
 	if !subs.ValidateToken(token) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": errInvalidToken})
+		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidToken})
 		return
 	}
 
@@ -67,13 +91,27 @@ func (h *handler) handleConfirmSubscription(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": msgConfirmed})
+	c.JSON(http.StatusOK, messageResponse{Message: msgConfirmed})
 }
 
+// handleDeactivateSubscription deactivates a subscription using the
+// unsubscribe token
+//
+// @Summary      Unsubscribe from a repository
+// @Description  Deactivates a subscription using the unsubscribe token.
+// @Tags         Subscriptions
+// @Produce      json
+// @Param        token         path    string  true   "Unsubscribe token from the email (base64url-encoded, 16 bytes)"
+// @Success      200  {object}  messageResponse  "Subscription deactivated"
+// @Failure      400  {object}  errorResponse    "Malformed token"
+// @Failure      404  {object}  errorResponse    "Token not found or already used"
+// @Failure      500  {object}  errorResponse    "Internal server error"
+// @Header       all  {string}  X-Request-ID     "Request identifier (client-provided or generated)"
+// @Router       /unsubscribe/{token} [post]
 func (h *handler) handleDeactivateSubscription(c *gin.Context) {
 	token := c.Param("token")
 	if !subs.ValidateToken(token) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": errInvalidToken})
+		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidToken})
 		return
 	}
 
@@ -82,14 +120,26 @@ func (h *handler) handleDeactivateSubscription(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": msgUnsubscribed})
+	c.JSON(http.StatusOK, messageResponse{Message: msgUnsubscribed})
 }
 
+// handleListSubscriptions returns the active subscriptions for an email
+//
+// @Summary      List active subscriptions
+// @Description  Returns all active subscriptions for the exact email address.
+// @Tags         Subscriptions
+// @Produce      json
+// @Param        email         query   string  true   "Email address (bare address only, for example alice@example.com)"
+// @Success      200  {array}   subscriptionResponse  "Active subscriptions; an empty array is returned when none exist"
+// @Failure      400  {object}  errorResponse          "Missing or invalid email"
+// @Failure      500  {object}  errorResponse          "Internal server error"
+// @Header       all  {string}  X-Request-ID           "Request identifier (client-provided or generated)"
+// @Router       /subscriptions [get]
 func (h *handler) handleListSubscriptions(c *gin.Context) {
 	email := c.Query("email")
 	addr, err := mail.ParseAddress(email)
 	if err != nil || addr.Address != email {
-		c.JSON(http.StatusBadRequest, gin.H{"error": errInvalidEmail})
+		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidEmail})
 		return
 	}
 
@@ -114,15 +164,15 @@ func (h *handler) handleListSubscriptions(c *gin.Context) {
 func (h *handler) respondServiceError(c *gin.Context, operation string, err error) {
 	switch {
 	case errors.Is(err, subs.ErrInvalidInput):
-		c.JSON(http.StatusBadRequest, gin.H{"error": errInvalidInput})
+		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidInput})
 	case errors.Is(err, subs.ErrRepoNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": errRepoNotFound})
+		c.JSON(http.StatusNotFound, errorResponse{Error: errRepoNotFound})
 	case errors.Is(err, subs.ErrSubscriptionConflict):
-		c.JSON(http.StatusConflict, gin.H{"error": errAlreadyExists})
+		c.JSON(http.StatusConflict, errorResponse{Error: errAlreadyExists})
 	case errors.Is(err, subs.ErrRateLimit):
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": errRateLimited})
+		c.JSON(http.StatusTooManyRequests, errorResponse{Error: errRateLimited})
 	case errors.Is(err, subs.ErrUpstreamError):
-		c.JSON(http.StatusBadGateway, gin.H{"error": errUpstream})
+		c.JSON(http.StatusBadGateway, errorResponse{Error: errUpstream})
 	default:
 		h.respondInternalError(c, operation, err)
 	}
@@ -130,7 +180,7 @@ func (h *handler) respondServiceError(c *gin.Context, operation string, err erro
 
 func (h *handler) respondTokenError(c *gin.Context, operation string, err error) {
 	if errors.Is(err, sql.ErrNoRows) {
-		c.JSON(http.StatusNotFound, gin.H{"error": errTokenNotFound})
+		c.JSON(http.StatusNotFound, errorResponse{Error: errTokenNotFound})
 		return
 	}
 
@@ -148,5 +198,5 @@ func (h *handler) respondInternalError(c *gin.Context, operation string, err err
 		)
 	}
 
-	c.JSON(http.StatusInternalServerError, gin.H{"error": errInternal})
+	c.JSON(http.StatusInternalServerError, errorResponse{Error: errInternal})
 }
