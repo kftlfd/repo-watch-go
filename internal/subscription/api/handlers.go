@@ -21,6 +21,7 @@ const (
 	errInvalidToken  = "invalid token"
 	errTokenNotFound = "token not found"
 	errInternal      = "internal server error"
+	errBodyTooLarge  = "request body too large"
 	msgCheckEmail    = "check email to confirm subscription"
 	msgConfirmed     = "subscription confirmed"
 	msgUnsubscribed  = "unsubscribed"
@@ -38,6 +39,10 @@ func (h *handler) handleCreateSubscription(c *gin.Context) {
 		Repo  string `json:"repo" form:"repo" binding:"required"`
 	}{}
 	if err := c.ShouldBind(&req); err != nil {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errBodyTooLarge})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": errInvalidInput})
 		return
 	}
