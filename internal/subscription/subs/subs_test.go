@@ -120,6 +120,28 @@ func TestCreateSubscription(t *testing.T) {
 	require.True(t, evCnt == 1)
 }
 
+func TestCreateSubscriptionSkipsGithubForKnownRepository(t *testing.T) {
+	db := newTestDB(t)
+
+	ctx := context.Background()
+	gh := &fakeGitHub{latestReleaseTag: "v1.2.3"}
+
+	svc := subs.NewService(subs.Deps{
+		GithubClient: gh,
+		DB:           db.DB,
+		Queries:      db.Queries,
+	})
+
+	require.NoError(t, svc.CreateSubscription(ctx, "alice@example.com", "owner/repository"))
+
+	gh.err = errors.New("github must not be called for a known repository")
+	require.NoError(t, svc.CreateSubscription(ctx, "bob@example.com", "owner/repository"))
+
+	dbRepo, err := db.Queries.GetRepositoryByID(ctx, "owner/repository")
+	require.NoError(t, err)
+	require.Equal(t, "v1.2.3", dbRepo.InitTag)
+}
+
 func TestCreateSubscriptionMapsGithubErrors(t *testing.T) {
 	db := newTestDB(t)
 

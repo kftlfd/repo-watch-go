@@ -57,15 +57,24 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return ErrInvalidInput
 	}
 
-	tag, err := s.gh.GetLatestReleaseTag(ctx, repoInfo.owner, repoInfo.name)
-	if err != nil {
-		if errors.Is(err, github.ErrNotFound) {
-			return ErrRepoNotFound
+	tag := ""
+	existingRepo, err := s.q.GetRepositoryByID(ctx, repoInfo.repoId)
+	switch {
+	case err == nil:
+		tag = existingRepo.InitTag
+	case errors.Is(err, sql.ErrNoRows):
+		tag, err = s.gh.GetLatestReleaseTag(ctx, repoInfo.owner, repoInfo.name)
+		if err != nil {
+			if errors.Is(err, github.ErrNotFound) {
+				return ErrRepoNotFound
+			}
+			if errors.Is(err, github.ErrRateLimit) {
+				return ErrRateLimit
+			}
+			return ErrUpstreamError
 		}
-		if errors.Is(err, github.ErrRateLimit) {
-			return ErrRateLimit
-		}
-		return ErrUpstreamError
+	default:
+		return fmt.Errorf("lookup repository: %w", err)
 	}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
