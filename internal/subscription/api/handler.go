@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"repo-watch/internal/subscription/api/docs"
 )
 
 const (
@@ -29,6 +31,7 @@ type HandlerDeps struct {
 	Logger      *slog.Logger
 	SubsService subsService
 	Metrics     Metrics
+	DocsHost    string
 }
 
 type handler struct {
@@ -37,6 +40,8 @@ type handler struct {
 }
 
 func NewHandler(d HandlerDeps) http.Handler {
+	docs.SwaggerInfo.Host = d.DocsHost
+
 	g := gin.New()
 	g.Use(observabilityMiddleware(d.Logger, d.Metrics))
 	g.Use(gin.Recovery())
@@ -112,4 +117,7 @@ func registerApiRoutes(rg *gin.RouterGroup, h *handler) {
 	rg.GET("/unsubscribe/:token", h.handleDeactivateSubscription)
 
 	rg.GET("/subscriptions", h.handleListSubscriptions)
+
+	rg.GET("/docs", serveScalarDocs)
+	rg.GET("/docs/openapi.json", serveOpenAPISpec)
 }

@@ -151,6 +151,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 			Logger:      apiLogger,
 			SubsService: subsSvc,
 			Metrics:     api.NewMetrics(metricsReg),
+			DocsHost:    cfg.APIHost,
 		}),
 	})
 

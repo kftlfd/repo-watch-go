@@ -15,6 +15,7 @@ type Config struct {
 	IsDev       bool
 	PortAPI     string
 	PortAdmin   string
+	APIHost     string
 	DbBaseUrl   string
 	DbUrl       string
 	DbName      string
@@ -30,6 +31,7 @@ func loadConfig() *Config {
 		IsDev:     os.Getenv("ENV") == "dev",
 		PortAPI:   utils.Env("PORT", "3000"),
 		PortAdmin: utils.Env("PORT_ADMIN", "4000"),
+		APIHost:   utils.Env("API_HOST", "localhost:3000"),
 
 		DbBaseUrl: os.Getenv("POSTGRES_URL"),
 		DbName:    utils.Env("DB_NAME", "subscription_db"),
