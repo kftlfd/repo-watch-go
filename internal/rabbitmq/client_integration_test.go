@@ -23,7 +23,7 @@ func startRabbitMQ(t *testing.T, ctx context.Context) (*rabbitmq.RabbitMQContain
 	// published port. Production URLs are stable, so pin the AMQP port here to
 	// keep exercising the client rather than the test harness.
 	hostPort := freeTCPPort(t)
-	container, err := rabbitmq.Run(ctx, "rabbitmq:3.13-management-alpine",
+	container, err := rabbitmq.Run(ctx, "rabbitmq:3.13-management",
 		testcontainers.WithHostConfigModifier(func(hc *dockercontainer.HostConfig) {
 			hc.PortBindings = network.PortMap{
 				network.MustParsePort("5672/tcp"): []network.PortBinding{{
