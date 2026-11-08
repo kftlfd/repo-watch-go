@@ -1,3 +1,5 @@
+//go:build integration
+
 package worker
 
 import (
@@ -10,57 +12,29 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	pg "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"repo-watch/internal/github"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/database"
 	"repo-watch/internal/scanner/database/migrations"
+	"repo-watch/tests/containers"
 )
 
 type scannerTestDB struct {
-	Container *pg.PostgresContainer
-	DB        *sql.DB
-	Queries   *database.Queries
+	DB      *sql.DB
+	Queries *database.Queries
 }
 
 func newScannerTestDB(t *testing.T) *scannerTestDB {
 	t.Helper()
 
-	ctx := context.Background()
-
-	container, err := pg.Run(
-		ctx,
-		"postgres:16-alpine",
-		pg.WithDatabase("scanner_test"),
-		pg.WithUsername("postgres"),
-		pg.WithPassword("postgres"),
-		pg.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		require.NoError(t, testcontainers.TerminateContainer(container))
-	})
-
-	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	db, err := postgres.Connect(dsn)
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		db.Close()
-	})
-
-	require.NoError(t, postgres.Migrate(ctx, db, migrations.MigrationsFS))
+	db := containers.NewPostgresDB(t, "scanner_test")
+	require.NoError(t, postgres.Migrate(t.Context(), db, migrations.MigrationsFS))
 
 	return &scannerTestDB{
-		Container: container,
-		DB:        db,
-		Queries:   database.New(db),
+		DB:      db,
+		Queries: database.New(db),
 	}
 }
 

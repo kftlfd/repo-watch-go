@@ -1,3 +1,5 @@
+//go:build integration
+
 package subs_test
 
 import (
@@ -8,8 +10,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	pg "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"repo-watch/internal/github"
 	"repo-watch/internal/postgres"
@@ -17,51 +17,23 @@ import (
 	"repo-watch/internal/subscription/database"
 	"repo-watch/internal/subscription/database/migrations"
 	"repo-watch/internal/subscription/subs"
+	"repo-watch/tests/containers"
 )
 
 type testDB struct {
-	Container *pg.PostgresContainer
-	DB        *sql.DB
-	Queries   *database.Queries
+	DB      *sql.DB
+	Queries *database.Queries
 }
 
 func newTestDB(t *testing.T) *testDB {
 	t.Helper()
 
-	ctx := context.Background()
-
-	container, err := pg.Run(
-		ctx,
-		"postgres:16-alpine",
-		pg.WithDatabase("subscription_test"),
-		pg.WithUsername("postgres"),
-		pg.WithPassword("postgres"),
-		pg.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		require.NoError(t, testcontainers.TerminateContainer(container))
-	})
-
-	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	db, err := postgres.Connect(dsn)
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		db.Close()
-	})
-
-	err = postgres.Migrate(ctx, db, migrations.MigrationsFS)
-
-	require.NoError(t, err)
+	db := containers.NewPostgresDB(t, "subscription_test")
+	require.NoError(t, postgres.Migrate(t.Context(), db, migrations.MigrationsFS))
 
 	return &testDB{
-		Container: container,
-		DB:        db,
-		Queries:   database.New(db),
+		DB:      db,
+		Queries: database.New(db),
 	}
 
 }

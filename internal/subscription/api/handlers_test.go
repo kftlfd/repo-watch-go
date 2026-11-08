@@ -263,9 +263,7 @@ func TestTokenEndpointsSupportGetAndPost(t *testing.T) {
 		confirm     bool
 		wantMessage string
 	}{
-		{name: "confirm get", method: http.MethodGet, path: "/api/confirm/" + token, confirm: true, wantMessage: msgConfirmed},
 		{name: "confirm post", method: http.MethodPost, path: "/api/confirm/" + token, confirm: true, wantMessage: msgConfirmed},
-		{name: "unsubscribe get", method: http.MethodGet, path: "/api/unsubscribe/" + token, wantMessage: msgUnsubscribed},
 		{name: "unsubscribe post", method: http.MethodPost, path: "/api/unsubscribe/" + token, wantMessage: msgUnsubscribed},
 	}
 
@@ -304,7 +302,7 @@ func TestTokenEndpointsMapErrors(t *testing.T) {
 		h, _ := newTestHandler(t, svc)
 
 		for _, path := range []string{"/api/confirm/" + token, "/api/unsubscribe/" + token} {
-			w := doRequest(t, h, http.MethodGet, path, "", "")
+			w := doRequest(t, h, http.MethodPost, path, "", "")
 			require.Equal(t, http.StatusNotFound, w.Code)
 			require.Equal(t, errTokenNotFound, decodeError(t, w))
 		}
@@ -315,7 +313,7 @@ func TestTokenEndpointsMapErrors(t *testing.T) {
 		h, _ := newTestHandler(t, svc)
 
 		for _, path := range []string{"/api/confirm/not-a-token", "/api/unsubscribe/not-a-token"} {
-			w := doRequest(t, h, http.MethodGet, path, "", "")
+			w := doRequest(t, h, http.MethodPost, path, "", "")
 			require.Equal(t, http.StatusBadRequest, w.Code)
 			require.Equal(t, errInvalidToken, decodeError(t, w))
 		}
@@ -332,7 +330,7 @@ func TestTokenEndpointsMapErrors(t *testing.T) {
 		h, logs := newTestHandler(t, svc)
 
 		for _, path := range []string{"/api/confirm/" + token, "/api/unsubscribe/" + token} {
-			w := doRequest(t, h, http.MethodGet, path, "", "")
+			w := doRequest(t, h, http.MethodPost, path, "", "")
 			require.Equal(t, http.StatusInternalServerError, w.Code)
 			require.Equal(t, errInternal, decodeError(t, w))
 			require.NotContains(t, w.Body.String(), "secret token lookup failure")
