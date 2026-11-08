@@ -109,13 +109,8 @@ func newRequestID() string {
 
 func registerApiRoutes(rg *gin.RouterGroup, h *handler) {
 	rg.POST("/subscribe", h.handleCreateSubscription)
-
 	rg.POST("/confirm/:token", h.handleConfirmSubscription)
-	rg.GET("/confirm/:token", h.handleConfirmSubscription)
-
 	rg.POST("/unsubscribe/:token", h.handleDeactivateSubscription)
-	rg.GET("/unsubscribe/:token", h.handleDeactivateSubscription)
-
 	rg.GET("/subscriptions", h.handleListSubscriptions)
 
 	rg.GET("/docs", serveScalarDocs)
