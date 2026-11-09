@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"repo-watch/internal/httpserver"
 	"repo-watch/internal/subscription/subs"
 )
 
@@ -46,7 +47,7 @@ const (
 // @Failure      502  {object}  errorResponse    "GitHub upstream error"
 // @Header       all  {string}  X-Request-ID     "Request identifier (client-provided or generated)"
 // @Router       /subscribe [post]
-func (h *handler) handleCreateSubscription(c *gin.Context) {
+func (h *apiHandler) handleCreateSubscription(c *gin.Context) {
 	req := createSubscriptionRequest{}
 	if err := c.ShouldBind(&req); err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
@@ -79,7 +80,7 @@ func (h *handler) handleCreateSubscription(c *gin.Context) {
 // @Failure      500  {object}  errorResponse    "Internal server error"
 // @Header       all  {string}  X-Request-ID     "Request identifier (client-provided or generated)"
 // @Router       /confirm/{token} [post]
-func (h *handler) handleConfirmSubscription(c *gin.Context) {
+func (h *apiHandler) handleConfirmSubscription(c *gin.Context) {
 	token := c.Param("token")
 	if !subs.ValidateToken(token) {
 		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidToken})
@@ -108,7 +109,7 @@ func (h *handler) handleConfirmSubscription(c *gin.Context) {
 // @Failure      500  {object}  errorResponse    "Internal server error"
 // @Header       all  {string}  X-Request-ID     "Request identifier (client-provided or generated)"
 // @Router       /unsubscribe/{token} [post]
-func (h *handler) handleDeactivateSubscription(c *gin.Context) {
+func (h *apiHandler) handleDeactivateSubscription(c *gin.Context) {
 	token := c.Param("token")
 	if !subs.ValidateToken(token) {
 		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidToken})
@@ -135,7 +136,7 @@ func (h *handler) handleDeactivateSubscription(c *gin.Context) {
 // @Failure      500  {object}  errorResponse          "Internal server error"
 // @Header       all  {string}  X-Request-ID           "Request identifier (client-provided or generated)"
 // @Router       /subscriptions [get]
-func (h *handler) handleListSubscriptions(c *gin.Context) {
+func (h *apiHandler) handleListSubscriptions(c *gin.Context) {
 	email := c.Query("email")
 	addr, err := mail.ParseAddress(email)
 	if err != nil || addr.Address != email {
@@ -161,7 +162,7 @@ func (h *handler) handleListSubscriptions(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-func (h *handler) respondServiceError(c *gin.Context, operation string, err error) {
+func (h *apiHandler) respondServiceError(c *gin.Context, operation string, err error) {
 	switch {
 	case errors.Is(err, subs.ErrInvalidInput):
 		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidInput})
@@ -178,7 +179,7 @@ func (h *handler) respondServiceError(c *gin.Context, operation string, err erro
 	}
 }
 
-func (h *handler) respondTokenError(c *gin.Context, operation string, err error) {
+func (h *apiHandler) respondTokenError(c *gin.Context, operation string, err error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(http.StatusNotFound, errorResponse{Error: errTokenNotFound})
 		return
@@ -187,10 +188,10 @@ func (h *handler) respondTokenError(c *gin.Context, operation string, err error)
 	h.respondInternalError(c, operation, err)
 }
 
-func (h *handler) respondInternalError(c *gin.Context, operation string, err error) {
+func (h *apiHandler) respondInternalError(c *gin.Context, operation string, err error) {
 	if h.logger != nil {
 		h.logger.Error("request failed",
-			"request_id", requestID(c),
+			"request_id", httpserver.RequestID(c),
 			"operation", operation,
 			"method", c.Request.Method,
 			"path", c.FullPath(),

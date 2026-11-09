@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"repo-watch/internal/httpserver"
 	"repo-watch/internal/subscription/subs"
 )
 
@@ -67,11 +68,16 @@ func newTestHandler(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer)
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	return NewHandler(HandlerDeps{
+	router := gin.New()
+	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}))
+	router.Use(gin.Recovery())
+
+	RegisterRoutes(router.Group("/api"), Deps{
 		Logger:      logger,
 		SubsService: svc,
-		Metrics:     fakeMetrics{},
-	}), logs
+	})
+
+	return router, logs
 }
 
 func doRequest(t *testing.T, h http.Handler, method, target, contentType, body string) *httptest.ResponseRecorder {

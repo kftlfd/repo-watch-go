@@ -25,6 +25,7 @@ import (
 	"repo-watch/internal/subscription/inbox"
 	"repo-watch/internal/subscription/outbox"
 	"repo-watch/internal/subscription/subs"
+	"repo-watch/internal/subscription/web"
 	"repo-watch/internal/taskrunner"
 )
 
@@ -143,16 +144,27 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		}),
 	})
 
-	apiLogger := logger.With("module", "api_server")
+	httpLogger := logger.With("module", "http_server")
+	httpMetrics := httpserver.NewMetrics(metricsReg)
+
+	router := gin.New()
+	router.Use(httpserver.ObservabilityMiddleware(httpLogger, httpMetrics))
+	router.Use(gin.Recovery())
+
+	api.RegisterRoutes(router.Group("/api"), api.Deps{
+		Logger:      httpLogger,
+		SubsService: subsSvc,
+		DocsHost:    cfg.APIHost,
+	})
+	web.RegisterRoutes(router.Group("/"), web.Deps{
+		Logger:      httpLogger,
+		SubsService: subsSvc,
+	})
+
 	apiServer := httpserver.NewServer(httpserver.ServerDeps{
-		Port:   cfg.PortAPI,
-		Logger: apiLogger,
-		Handler: api.NewHandler(api.HandlerDeps{
-			Logger:      apiLogger,
-			SubsService: subsSvc,
-			Metrics:     api.NewMetrics(metricsReg),
-			DocsHost:    cfg.APIHost,
-		}),
+		Port:    cfg.PortAPI,
+		Logger:  httpLogger,
+		Handler: router,
 	})
 
 	g.Go("admin server", adminServer.Start)
