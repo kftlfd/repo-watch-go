@@ -13,6 +13,7 @@ type Config struct {
 	LogLevel    slog.Level
 	PortAdmin   string
 	RabbitMQUrl string
+	AppBaseURL  string
 }
 
 func loadConfig() *Config {
@@ -20,6 +21,7 @@ func loadConfig() *Config {
 		LogLevel:    logger.ParseLevel(os.Getenv("LOG_LEVEL")),
 		PortAdmin:   utils.Env("PORT_ADMIN", "4000"),
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
+		AppBaseURL:  utils.Env("APP_BASE_URL", "http://localhost:3000"),
 	}
 }
 

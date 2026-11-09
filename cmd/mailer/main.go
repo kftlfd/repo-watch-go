@@ -56,6 +56,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	mailerWorker, err := mailer.NewMailer(mailer.Deps{
 		Logger:         logger,
 		RabbitConsumer: rabbitConsumer,
+		BaseURL:        cfg.AppBaseURL,
 	})
 	if err != nil {
 		return fmt.Errorf("create mailer worker: %w", err)

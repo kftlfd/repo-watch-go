@@ -16,12 +16,14 @@ type Deps struct {
 	Logger         *slog.Logger
 	RabbitConsumer rabbitmq.RabbitJSONConsumer
 	EmailMetrics   EmailMetricsRecorder
+	BaseURL        string
 }
 
 type mailerWorker struct {
 	logger   *slog.Logger
 	consumer rabbitmq.RabbitJSONConsumer
 	metrics  EmailMetricsRecorder
+	baseURL  string
 }
 
 func NewMailer(d Deps) (*mailerWorker, error) {
@@ -39,6 +41,7 @@ func NewMailer(d Deps) (*mailerWorker, error) {
 		logger:   d.Logger.With("module", "mailer_worker"),
 		consumer: d.RabbitConsumer,
 		metrics:  d.EmailMetrics,
+		baseURL:  strings.TrimRight(d.BaseURL, "/"),
 	}, nil
 }
 
@@ -56,7 +59,7 @@ func (m *mailerWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, err
 			m.metrics.Failed("invalid_payload")
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid JSON payload: %w", err)
 		}
-		email, err := renderEmail(ev)
+		email, err := renderEmail(ev, m.baseURL)
 		if err != nil {
 			m.metrics.Failed(ev.Type)
 			return rabbitmq.NackDiscard, err
@@ -78,7 +81,7 @@ type Email struct {
 
 var ErrInvalidPayloadData = errors.New("invalid payload data")
 
-func renderEmail(payload rabbitmq.EventEmailQueuedPayload) (Email, error) {
+func renderEmail(payload rabbitmq.EventEmailQueuedPayload, baseURL string) (Email, error) {
 	switch payload.Type {
 
 	case emails.EmailConfirmSubscription:
@@ -88,7 +91,7 @@ func renderEmail(payload rabbitmq.EventEmailQueuedPayload) (Email, error) {
 		}
 		return Email{
 			subject: fmt.Sprintf("Confirm subscription to: %v", data.RepoID),
-			body:    fmt.Sprintf("To confirm the subscription use this token: %v", data.ConfirmToken),
+			body:    fmt.Sprintf("To confirm the subscription, open: %v", joinURL(baseURL, "/confirm/"+data.ConfirmToken)),
 		}, nil
 
 	case emails.EmailSubscribed:
@@ -108,7 +111,7 @@ func renderEmail(payload rabbitmq.EventEmailQueuedPayload) (Email, error) {
 		}
 		return Email{
 			subject: fmt.Sprintf("New release for %v: %v", data.RepoID, data.Tag),
-			body:    fmt.Sprintf("Go check on GH, idk.\nUnsubscribe token: %v", data.UnsubToken),
+			body:    fmt.Sprintf("Go check on GH, idk.\nUnsubscribe: %v", joinURL(baseURL, "/unsubscribe/"+data.UnsubToken)),
 		}, nil
 
 	case emails.EmailUnsubscribed:
@@ -134,6 +137,10 @@ func renderEmail(payload rabbitmq.EventEmailQueuedPayload) (Email, error) {
 	default:
 		return Email{}, fmt.Errorf("unexpected email type: %q", payload.Type)
 	}
+}
+
+func joinURL(baseURL, path string) string {
+	return strings.TrimRight(baseURL, "/") + path
 }
 
 func printEmail(recipient string, email Email) {

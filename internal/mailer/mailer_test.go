@@ -26,7 +26,7 @@ func TestRenderEmail(t *testing.T) {
 				ConfirmToken: "confirm-token",
 			},
 			wantSubject: "Confirm subscription to: owner/repository",
-			wantBody:    "confirm-token",
+			wantBody:    "https://example.test/confirm/confirm-token",
 		},
 		{
 			name:      "subscribed",
@@ -48,7 +48,7 @@ func TestRenderEmail(t *testing.T) {
 				UnsubToken: "unsub-token",
 			},
 			wantSubject: "New release for owner/repository: v1.2.3",
-			wantBody:    "unsub-token",
+			wantBody:    "https://example.test/unsubscribe/unsub-token",
 		},
 		{
 			name:      "unsubscribed",
@@ -79,7 +79,7 @@ func TestRenderEmail(t *testing.T) {
 				Recipient: "alice@example.com",
 				Type:      tt.emailType,
 				Data:      data,
-			})
+			}, "https://example.test")
 			require.NoError(t, err)
 			require.Equal(t, tt.wantSubject, email.subject)
 			require.Contains(t, email.body, tt.wantBody)
@@ -91,7 +91,7 @@ func TestRenderEmailRejectsInvalidData(t *testing.T) {
 	_, err := renderEmail(rabbitmq.EventEmailQueuedPayload{
 		Type: emails.EmailRepositoryRemoved,
 		Data: json.RawMessage(`"not-an-object"`),
-	})
+	}, "https://example.test")
 	require.ErrorIs(t, err, ErrInvalidPayloadData)
 }
 
@@ -99,6 +99,6 @@ func TestRenderEmailRejectsUnknownType(t *testing.T) {
 	_, err := renderEmail(rabbitmq.EventEmailQueuedPayload{
 		Type: "unknown-email-type",
 		Data: json.RawMessage(`{}`),
-	})
+	}, "https://example.test")
 	require.ErrorContains(t, err, `unexpected email type: "unknown-email-type"`)
 }
