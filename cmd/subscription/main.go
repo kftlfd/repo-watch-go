@@ -149,15 +149,13 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 
 	router := gin.New()
 	router.Use(httpserver.ObservabilityMiddleware(httpLogger, httpMetrics))
-	router.Use(gin.Recovery())
+	router.Use(httpserver.Recovery())
 
 	api.RegisterRoutes(router.Group("/api"), api.Deps{
-		Logger:      httpLogger,
 		SubsService: subsSvc,
 		DocsHost:    cfg.APIHost,
 	})
 	web.RegisterRoutes(router.Group("/"), web.Deps{
-		Logger:      httpLogger,
 		SubsService: subsSvc,
 	})
 

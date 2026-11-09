@@ -189,15 +189,6 @@ func (h *apiHandler) respondTokenError(c *gin.Context, operation string, err err
 }
 
 func (h *apiHandler) respondInternalError(c *gin.Context, operation string, err error) {
-	if h.logger != nil {
-		h.logger.Error("request failed",
-			"request_id", httpserver.RequestID(c),
-			"operation", operation,
-			"method", c.Request.Method,
-			"path", c.FullPath(),
-			"error", err,
-		)
-	}
-
+	httpserver.RecordError(c, operation, err)
 	c.JSON(http.StatusInternalServerError, errorResponse{Error: errInternal})
 }

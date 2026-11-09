@@ -3,6 +3,7 @@ package httpserver
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -32,30 +33,42 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 		c.Next()
 
 		duration := time.Since(start)
+		status := c.Writer.Status()
 
 		attrs := []any{
 			slog.String("request_id", requestID),
 			slog.String("method", c.Request.Method),
 			slog.String("path", path),
 			slog.String("query", query),
-			slog.Int("status", c.Writer.Status()),
+			slog.Int("status", status),
 			slog.Duration("latency", duration),
 			// slog.String("client_ip", c.ClientIP()),
 			// slog.Int("body_size", c.Writer.Size()),
 		}
 
-		if len(c.Errors) > 0 {
-			attrs = append(attrs, slog.Any("error", c.Errors.Errors()))
+		hasError := len(c.Errors) > 0
+		if last := c.Errors.Last(); last != nil {
+			if reqErr, ok := errors.AsType[*RequestError](last.Err); ok {
+				attrs = append(attrs,
+					slog.String("operation", reqErr.Operation),
+					slog.Any("error", reqErr.Err),
+				)
+			} else {
+				attrs = append(attrs, slog.Any("error", last.Err))
+			}
 		}
 
-		m.HTTPRequest(c.Request.Method, c.FullPath(), c.Writer.Status(), duration)
+		m.HTTPRequest(c.Request.Method, path, status, duration)
 
-		logger.Info("request", attrs...)
+		switch {
+		case hasError || status >= 500:
+			logger.Error("request failed", attrs...)
+		case status >= 400:
+			logger.Warn("request", attrs...)
+		default:
+			logger.Info("request", attrs...)
+		}
 	}
-}
-
-func RequestID(c *gin.Context) string {
-	return c.GetString(requestIDKey)
 }
 
 func newRequestID() string {

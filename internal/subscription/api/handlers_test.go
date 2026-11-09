@@ -70,10 +70,9 @@ func newTestHandler(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer)
 
 	router := gin.New()
 	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}))
-	router.Use(gin.Recovery())
+	router.Use(httpserver.Recovery())
 
 	RegisterRoutes(router.Group("/api"), Deps{
-		Logger:      logger,
 		SubsService: svc,
 	})
 
@@ -191,10 +190,11 @@ func TestSubscribeRejectsInvalidBody(t *testing.T) {
 
 func TestSubscribeMapsServiceErrors(t *testing.T) {
 	tests := []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantBody   string
+		name         string
+		err          error
+		wantStatus   int
+		wantBody     string
+		wantErrorLog bool
 	}{
 		{
 			name:       "invalid input",
@@ -221,10 +221,11 @@ func TestSubscribeMapsServiceErrors(t *testing.T) {
 			wantBody:   errRateLimited,
 		},
 		{
-			name:       "upstream",
-			err:        subs.ErrUpstreamError,
-			wantStatus: http.StatusBadGateway,
-			wantBody:   errUpstream,
+			name:         "upstream",
+			err:          subs.ErrUpstreamError,
+			wantStatus:   http.StatusBadGateway,
+			wantBody:     errUpstream,
+			wantErrorLog: true,
 		},
 	}
 
@@ -238,7 +239,11 @@ func TestSubscribeMapsServiceErrors(t *testing.T) {
 
 			require.Equal(t, tt.wantStatus, w.Code)
 			require.Equal(t, tt.wantBody, decodeError(t, w))
-			require.NotContains(t, logs.String(), "request failed")
+			if tt.wantErrorLog {
+				require.Contains(t, logs.String(), "request failed")
+			} else {
+				require.NotContains(t, logs.String(), "request failed")
+			}
 		})
 	}
 }

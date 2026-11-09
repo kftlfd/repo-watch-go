@@ -63,10 +63,9 @@ func newTestRouter(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer) 
 
 	router := gin.New()
 	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}))
-	router.Use(gin.Recovery())
+	router.Use(httpserver.Recovery())
 
 	RegisterRoutes(router.Group("/"), Deps{
-		Logger:      logger,
 		SubsService: svc,
 	})
 
@@ -154,10 +153,11 @@ func TestSubscribeRejectsInvalidForm(t *testing.T) {
 
 func TestSubscribeMapsServiceErrors(t *testing.T) {
 	tests := []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantBody   string
+		name         string
+		err          error
+		wantStatus   int
+		wantBody     string
+		wantErrorLog bool
 	}{
 		{
 			name:       "invalid input",
@@ -184,10 +184,11 @@ func TestSubscribeMapsServiceErrors(t *testing.T) {
 			wantBody:   "GitHub rate limit exceeded. Please try again later.",
 		},
 		{
-			name:       "upstream",
-			err:        subs.ErrUpstreamError,
-			wantStatus: http.StatusBadGateway,
-			wantBody:   "GitHub is unavailable right now. Please try again later.",
+			name:         "upstream",
+			err:          subs.ErrUpstreamError,
+			wantStatus:   http.StatusBadGateway,
+			wantBody:     "GitHub is unavailable right now. Please try again later.",
+			wantErrorLog: true,
 		},
 	}
 
@@ -206,7 +207,11 @@ func TestSubscribeMapsServiceErrors(t *testing.T) {
 
 			require.Equal(t, tt.wantStatus, w.Code)
 			require.Contains(t, w.Body.String(), tt.wantBody)
-			require.NotContains(t, logs.String(), "request failed")
+			if tt.wantErrorLog {
+				require.Contains(t, logs.String(), "request failed")
+			} else {
+				require.NotContains(t, logs.String(), "request failed")
+			}
 		})
 	}
 }

@@ -49,7 +49,7 @@ func (h *webHandler) handleCreateSubscription(c *gin.Context) {
 	if err := h.subsService.CreateSubscription(c.Request.Context(), form.Email, form.Repo); err != nil {
 		status, message := subscribeErrorMessage(err)
 		if status == http.StatusInternalServerError {
-			h.logError(c, "create subscription", err)
+			httpserver.RecordError(c, "create subscription", err)
 		}
 		h.renderSubscribeError(c, status, form, message)
 		return
@@ -82,7 +82,7 @@ func (h *webHandler) handleConfirmSubscription(c *gin.Context) {
 	if err := h.subsService.ConfirmSubscription(c.Request.Context(), token); err != nil {
 		status, message := tokenErrorMessage(err)
 		if status == http.StatusInternalServerError {
-			h.logError(c, "confirm subscription", err)
+			httpserver.RecordError(c, "confirm subscription", err)
 		}
 		h.render(c, status, "result.html", pageData{
 			Title:   "Could not confirm subscription",
@@ -118,7 +118,7 @@ func (h *webHandler) handleDeactivateSubscription(c *gin.Context) {
 	if err := h.subsService.DeactivateSubscription(c.Request.Context(), token); err != nil {
 		status, message := tokenErrorMessage(err)
 		if status == http.StatusInternalServerError {
-			h.logError(c, "unsubscribe", err)
+			httpserver.RecordError(c, "unsubscribe", err)
 		}
 		h.render(c, status, "result.html", pageData{
 			Title:   "Could not unsubscribe",
@@ -159,21 +159,7 @@ func (h *webHandler) render(c *gin.Context, status int, name string, data pageDa
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.Status(status)
 
-	if err := templates.ExecuteTemplate(c.Writer, name, data); err != nil && h.logger != nil {
-		h.logger.Error("render template", "template", name, "error", err)
+	if err := templates.ExecuteTemplate(c.Writer, name, data); err != nil {
+		httpserver.RecordError(c, "render template", err)
 	}
-}
-
-func (h *webHandler) logError(c *gin.Context, operation string, err error) {
-	if h.logger == nil {
-		return
-	}
-
-	h.logger.Error("request failed",
-		"request_id", httpserver.RequestID(c),
-		"operation", operation,
-		"method", c.Request.Method,
-		"path", c.FullPath(),
-		"error", err,
-	)
 }

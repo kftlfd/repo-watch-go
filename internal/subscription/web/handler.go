@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/gin-gonic/gin"
 )
@@ -14,19 +13,16 @@ type subsService interface {
 }
 
 type Deps struct {
-	Logger      *slog.Logger
 	SubsService subsService
 }
 
 type webHandler struct {
 	subsService subsService
-	logger      *slog.Logger
 }
 
 func RegisterRoutes(rg *gin.RouterGroup, d Deps) {
 	h := &webHandler{
 		subsService: d.SubsService,
-		logger:      d.Logger,
 	}
 
 	rg.GET("/", h.handleSubscribePage)
