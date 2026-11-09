@@ -25,12 +25,23 @@ func RegisterRoutes(rg *gin.RouterGroup, d Deps) {
 		subsService: d.SubsService,
 	}
 
-	rg.GET("/", h.handleSubscribePage)
-	rg.POST("/subscribe", h.handleCreateSubscription)
+	pages := rg.Group("")
+	pages.Use(noStore)
 
-	rg.GET("/confirm/:token", h.handleConfirmPage)
-	rg.POST("/confirm/:token", h.handleConfirmSubscription)
+	pages.GET("/", h.handleSubscribePage)
+	pages.POST("/subscribe", h.handleCreateSubscription)
 
-	rg.GET("/unsubscribe/:token", h.handleUnsubscribePage)
-	rg.POST("/unsubscribe/:token", h.handleDeactivateSubscription)
+	pages.GET("/confirm/:token", h.handleConfirmPage)
+	pages.POST("/confirm/:token", h.handleConfirmSubscription)
+
+	pages.GET("/unsubscribe/:token", h.handleUnsubscribePage)
+	pages.POST("/unsubscribe/:token", h.handleDeactivateSubscription)
+
+	static := rg.Group("/static")
+	static.GET("/*filepath", h.handleStatic)
+}
+
+func noStore(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.Next()
 }
