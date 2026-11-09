@@ -41,7 +41,7 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 			slog.String("path", path),
 			slog.String("query", query),
 			slog.Int("status", status),
-			slog.Duration("latency", duration),
+			slog.String("latency", duration.String()),
 			// slog.String("client_ip", c.ClientIP()),
 			// slog.Int("body_size", c.Writer.Size()),
 		}
