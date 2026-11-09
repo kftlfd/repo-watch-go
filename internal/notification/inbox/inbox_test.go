@@ -8,7 +8,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 
-	"repo-watch/internal/notification/database"
+	"repo-watch/internal/notification/db/dbGen"
 	"repo-watch/internal/rabbitmq"
 )
 
@@ -37,7 +37,7 @@ func TestHandlerRequeuesTransientDatabaseFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	w := &inboxWorker{q: database.New(db)}
+	w := &inboxWorker{q: dbGen.New(db)}
 
 	ack, err := w.handler(rabbitmq.EnvelopeJSON{
 		EventType: rabbitmq.EventSubscriptionChanged,

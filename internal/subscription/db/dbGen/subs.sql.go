@@ -3,7 +3,7 @@
 //   sqlc v1.31.1
 // source: subs.sql
 
-package database
+package dbGen
 
 import (
 	"context"

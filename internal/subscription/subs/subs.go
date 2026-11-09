@@ -11,7 +11,7 @@ import (
 	"repo-watch/internal/emails"
 	"repo-watch/internal/github"
 	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/subscription/database"
+	"repo-watch/internal/subscription/db/dbGen"
 )
 
 var (
@@ -29,13 +29,13 @@ type GithubClient interface {
 type Deps struct {
 	GithubClient GithubClient
 	DB           *sql.DB
-	Queries      *database.Queries
+	Queries      *dbGen.Queries
 }
 
 type service struct {
 	gh GithubClient
 	db *sql.DB
-	q  *database.Queries
+	q  *dbGen.Queries
 }
 
 func NewService(d Deps) *service {
@@ -85,7 +85,7 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 
 	qtx := s.q.WithTx(tx)
 
-	_, err = qtx.CreateRepository(ctx, database.CreateRepositoryParams{
+	_, err = qtx.CreateRepository(ctx, dbGen.CreateRepositoryParams{
 		ID:      repoInfo.repoId,
 		Owner:   repoInfo.owner,
 		Name:    repoInfo.name,
@@ -98,12 +98,12 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return err
 	}
 
-	dbSub, err := qtx.CreateSubscription(ctx, database.CreateSubscriptionParams{
+	dbSub, err := qtx.CreateSubscription(ctx, dbGen.CreateSubscriptionParams{
 		Email:        emailInfo.email,
 		RepositoryID: repoInfo.repoId,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		dbSub, err = qtx.GetSubscription(ctx, database.GetSubscriptionParams{
+		dbSub, err = qtx.GetSubscription(ctx, dbGen.GetSubscriptionParams{
 			Email:        emailInfo.email,
 			RepositoryID: repoInfo.repoId,
 		})
@@ -120,7 +120,7 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return err
 	}
 
-	_, err = qtx.CreateToken(ctx, database.CreateTokenParams{
+	_, err = qtx.CreateToken(ctx, dbGen.CreateTokenParams{
 		SubscriptionID: dbSub.ID,
 		TokenType:      TokenTypeConfirm,
 		TokenVal:       tokenVal,
@@ -164,7 +164,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 
 	qtx := s.q.WithTx(tx)
 
-	t, err := qtx.FindTokenWDate(ctx, database.FindTokenWDateParams{
+	t, err := qtx.FindTokenWDate(ctx, dbGen.FindTokenWDateParams{
 		TokenType: TokenTypeConfirm,
 		TokenVal:  token,
 		CreatedAt: time.Now().Add(-ConfirmTokenValidity),
@@ -193,7 +193,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	unsubToken, err := qtx.CreateToken(ctx, database.CreateTokenParams{
+	unsubToken, err := qtx.CreateToken(ctx, dbGen.CreateTokenParams{
 		SubscriptionID: sub.ID,
 		TokenType:      TokenTypeUnsub,
 		TokenVal:       unsubTokenVal,
@@ -278,7 +278,7 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 
 	qtx := s.q.WithTx(tx)
 
-	t, err := qtx.FindToken(ctx, database.FindTokenParams{
+	t, err := qtx.FindToken(ctx, dbGen.FindTokenParams{
 		TokenType: TokenTypeUnsub,
 		TokenVal:  token,
 	})
@@ -376,13 +376,13 @@ func (s *service) GetSubscriptionsList(ctx context.Context, email string) ([]str
 	return subs, nil
 }
 
-func saveToOutbox(ctx context.Context, qtx *database.Queries, eventType string, eventPayload any) error {
+func saveToOutbox(ctx context.Context, qtx *dbGen.Queries, eventType string, eventPayload any) error {
 	jsonData, err := json.Marshal(eventPayload)
 	if err != nil {
 		return fmt.Errorf("json marshal event: %w", err)
 	}
 
-	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
+	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
 		EventType: eventType,
 		Payload:   jsonData,
 	})

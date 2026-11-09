@@ -16,14 +16,14 @@ import (
 	"repo-watch/internal/github"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/scanner/database"
-	"repo-watch/internal/scanner/database/migrations"
+	"repo-watch/internal/scanner/db/dbGen"
+	"repo-watch/internal/scanner/db/migrations"
 	"repo-watch/tests/containers"
 )
 
 type scannerTestDB struct {
 	DB      *sql.DB
-	Queries *database.Queries
+	Queries *dbGen.Queries
 }
 
 func newScannerTestDB(t *testing.T) *scannerTestDB {
@@ -34,7 +34,7 @@ func newScannerTestDB(t *testing.T) *scannerTestDB {
 
 	return &scannerTestDB{
 		DB:      db,
-		Queries: database.New(db),
+		Queries: dbGen.New(db),
 	}
 }
 
@@ -73,7 +73,7 @@ type fakeMetrics struct {
 func (m *fakeMetrics) ScanOk()  { m.ok++ }
 func (m *fakeMetrics) ScanErr() { m.errs++ }
 
-func newTestWorker(db *sql.DB, q *database.Queries, gh GithubClient, cfg Config) (*scannerWorker, *fakeMetrics) {
+func newTestWorker(db *sql.DB, q *dbGen.Queries, gh GithubClient, cfg Config) (*scannerWorker, *fakeMetrics) {
 	metrics := &fakeMetrics{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
 		Level: slog.LevelError,
@@ -117,10 +117,10 @@ func resetScannerDB(t *testing.T, ctx context.Context, db *sql.DB) {
 	}
 }
 
-func insertRepo(t *testing.T, ctx context.Context, q *database.Queries, repoID, tag string) {
+func insertRepo(t *testing.T, ctx context.Context, q *dbGen.Queries, repoID, tag string) {
 	t.Helper()
 
-	err := q.CreateOrUpdateRepo(ctx, database.CreateOrUpdateRepoParams{
+	err := q.CreateOrUpdateRepo(ctx, dbGen.CreateOrUpdateRepoParams{
 		ID:            repoID,
 		Owner:         "owner",
 		Name:          "repository",

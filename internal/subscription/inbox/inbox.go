@@ -8,20 +8,20 @@ import (
 	"log/slog"
 
 	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/subscription/database"
+	"repo-watch/internal/subscription/db/dbGen"
 )
 
 type Deps struct {
 	Logger         *slog.Logger
 	RabbitConsumer rabbitmq.RabbitJSONConsumer
 	DB             *sql.DB
-	Queries        *database.Queries
+	Queries        *dbGen.Queries
 }
 
 type inboxWorker struct {
 	logger   *slog.Logger
 	db       *sql.DB
-	q        *database.Queries
+	q        *dbGen.Queries
 	consumer rabbitmq.RabbitJSONConsumer
 }
 

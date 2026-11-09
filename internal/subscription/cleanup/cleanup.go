@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"repo-watch/internal/subscription/database"
+	"repo-watch/internal/subscription/db/dbGen"
 	"repo-watch/internal/subscription/subs"
 	"repo-watch/internal/taskrunner"
 )
@@ -15,7 +15,7 @@ const (
 	processedEventsRetention = time.Hour * 24 * 14
 )
 
-func CreateCleanupTasks(queries *database.Queries, now func() time.Time) []taskrunner.Task {
+func CreateCleanupTasks(queries *dbGen.Queries, now func() time.Time) []taskrunner.Task {
 	return []taskrunner.Task{
 		{
 			Name: "cleanup expired confirm tokens",

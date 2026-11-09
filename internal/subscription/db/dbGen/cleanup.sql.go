@@ -3,20 +3,21 @@
 //   sqlc v1.31.1
 // source: cleanup.sql
 
-package database
+package dbGen
 
 import (
 	"context"
 	"time"
 )
 
-const deleteOldReleases = `-- name: DeleteOldReleases :execrows
-DELETE FROM releases
-WHERE created_at < $1::timestamptz
+const deleteExpiredConfirmTokens = `-- name: DeleteExpiredConfirmTokens :execrows
+DELETE FROM tokens
+WHERE token_type = 'confirm'
+    AND created_at < $1::timestamptz
 `
 
-func (q *Queries) DeleteOldReleases(ctx context.Context, cutoff time.Time) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteOldReleases, cutoff)
+func (q *Queries) DeleteExpiredConfirmTokens(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteExpiredConfirmTokens, cutoff)
 	if err != nil {
 		return 0, err
 	}

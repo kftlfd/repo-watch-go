@@ -19,8 +19,8 @@ import (
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/cleanup"
-	"repo-watch/internal/scanner/database"
-	"repo-watch/internal/scanner/database/migrations"
+	"repo-watch/internal/scanner/db/dbGen"
+	"repo-watch/internal/scanner/db/migrations"
 	"repo-watch/internal/scanner/inbox"
 	"repo-watch/internal/scanner/outbox"
 	"repo-watch/internal/scanner/worker"
@@ -95,7 +95,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		github.WithApiKey(cfg.GithubToken),
 	)
 
-	queries := database.New(db)
+	queries := dbGen.New(db)
 
 	inboxWorker, err := inbox.NewInboxWorker(inbox.Deps{
 		Logger:         logger,

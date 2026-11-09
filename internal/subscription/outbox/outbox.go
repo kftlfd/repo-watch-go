@@ -10,7 +10,7 @@ import (
 
 	"repo-watch/internal/dispatcher"
 	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/subscription/database"
+	"repo-watch/internal/subscription/db/dbGen"
 )
 
 var validEventTypes = []string{
@@ -31,15 +31,15 @@ func validateEventType(eventType string) (invalidReason string) {
 }
 
 type subscriptionOutbox struct {
-	q *database.Queries
+	q *dbGen.Queries
 }
 
-func NewSubsctiptionOutbox(queries *database.Queries) dispatcher.Store {
+func NewSubsctiptionOutbox(queries *dbGen.Queries) dispatcher.Store {
 	return &subscriptionOutbox{q: queries}
 }
 
 func (s *subscriptionOutbox) GetNextBatch(ctx context.Context, batchSize int32, leasedUntil time.Time) ([]dispatcher.Row, error) {
-	res, err := s.q.GetOutboxBatch(ctx, database.GetOutboxBatchParams{
+	res, err := s.q.GetOutboxBatch(ctx, dbGen.GetOutboxBatchParams{
 		Limit: batchSize,
 		LeasedUntil: sql.NullTime{
 			Valid: true,
@@ -77,7 +77,7 @@ func (s *subscriptionOutbox) RecordFailure(
 	terminal bool,
 	maxAttempts int32,
 ) (dispatcher.Failure, error) {
-	res, err := s.q.RecordOutboxFailure(ctx, database.RecordOutboxFailureParams{
+	res, err := s.q.RecordOutboxFailure(ctx, dbGen.RecordOutboxFailureParams{
 		ID:          id,
 		LastError:   lastError,
 		Terminal:    terminal,

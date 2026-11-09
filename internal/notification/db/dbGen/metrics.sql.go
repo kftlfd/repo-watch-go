@@ -3,7 +3,7 @@
 //   sqlc v1.31.1
 // source: metrics.sql
 
-package database
+package dbGen
 
 import (
 	"context"

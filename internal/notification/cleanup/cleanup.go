@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"repo-watch/internal/notification/database"
+	"repo-watch/internal/notification/db/dbGen"
 	"repo-watch/internal/taskrunner"
 )
 
@@ -13,7 +13,7 @@ const (
 )
 
 func CreateCleanupTasks(
-	queries *database.Queries,
+	queries *dbGen.Queries,
 	now func() time.Time,
 ) []taskrunner.Task {
 	return []taskrunner.Task{

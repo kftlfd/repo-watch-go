@@ -8,12 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"repo-watch/internal/emails"
-	"repo-watch/internal/notification/database"
+	"repo-watch/internal/notification/db/dbGen"
 	"repo-watch/internal/rabbitmq"
 )
 
 func TestGetPayloadRepoRemoved(t *testing.T) {
-	row := database.Outbox{
+	row := dbGen.Outbox{
 		ID:           1,
 		Type:         "repo_removed",
 		Email:        "alice@example.com",
@@ -39,7 +39,7 @@ func TestGetPayloadRepoRemoved(t *testing.T) {
 }
 
 func TestGetPayloadNewRelease(t *testing.T) {
-	row := database.Outbox{
+	row := dbGen.Outbox{
 		ID:           2,
 		Type:         "new_release",
 		Email:        "bob@example.com",
@@ -69,6 +69,6 @@ func TestGetPayloadNewRelease(t *testing.T) {
 }
 
 func TestGetPayloadUnknownType(t *testing.T) {
-	_, _, err := getEventPayload(database.Outbox{Type: "unknown"})
+	_, _, err := getEventPayload(dbGen.Outbox{Type: "unknown"})
 	require.ErrorContains(t, err, "unknown")
 }

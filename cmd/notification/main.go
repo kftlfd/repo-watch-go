@@ -16,8 +16,8 @@ import (
 	"repo-watch/internal/httpserver"
 	"repo-watch/internal/logger"
 	"repo-watch/internal/notification/cleanup"
-	"repo-watch/internal/notification/database"
-	"repo-watch/internal/notification/database/migrations"
+	"repo-watch/internal/notification/db/dbGen"
+	"repo-watch/internal/notification/db/migrations"
 	"repo-watch/internal/notification/inbox"
 	"repo-watch/internal/notification/outbox"
 	"repo-watch/internal/postgres"
@@ -88,7 +88,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 
 	logger.Info("initiating components")
 
-	queries := database.New(db)
+	queries := dbGen.New(db)
 
 	inboxWorker, err := inbox.NewInboxWorker(inbox.Deps{
 		Logger:         logger,

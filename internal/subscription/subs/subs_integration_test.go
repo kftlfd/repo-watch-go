@@ -14,15 +14,15 @@ import (
 	"repo-watch/internal/github"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/subscription/database"
-	"repo-watch/internal/subscription/database/migrations"
+	"repo-watch/internal/subscription/db/dbGen"
+	"repo-watch/internal/subscription/db/migrations"
 	"repo-watch/internal/subscription/subs"
 	"repo-watch/tests/containers"
 )
 
 type testDB struct {
 	DB      *sql.DB
-	Queries *database.Queries
+	Queries *dbGen.Queries
 }
 
 func newTestDB(t *testing.T) *testDB {
@@ -33,7 +33,7 @@ func newTestDB(t *testing.T) *testDB {
 
 	return &testDB{
 		DB:      db,
-		Queries: database.New(db),
+		Queries: dbGen.New(db),
 	}
 
 }
@@ -74,14 +74,14 @@ func TestCreateSubscription(t *testing.T) {
 	dbRepo, err := db.Queries.GetRepositoryByID(ctx, repo)
 	require.NoError(t, err)
 
-	dbSub, err := db.Queries.GetSubscription(ctx, database.GetSubscriptionParams{
+	dbSub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
 		Email:        email,
 		RepositoryID: dbRepo.ID,
 	})
 	require.NoError(t, err)
 	require.Equal(t, false, dbSub.Active)
 
-	_, err = db.Queries.GetToken(ctx, database.GetTokenParams{
+	_, err = db.Queries.GetToken(ctx, dbGen.GetTokenParams{
 		SubscriptionID: dbSub.ID,
 		TokenType:      subs.TokenTypeConfirm,
 	})

@@ -20,8 +20,8 @@ import (
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/api"
 	"repo-watch/internal/subscription/cleanup"
-	"repo-watch/internal/subscription/database"
-	"repo-watch/internal/subscription/database/migrations"
+	"repo-watch/internal/subscription/db/dbGen"
+	"repo-watch/internal/subscription/db/migrations"
 	"repo-watch/internal/subscription/inbox"
 	"repo-watch/internal/subscription/outbox"
 	"repo-watch/internal/subscription/subs"
@@ -97,7 +97,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		github.WithApiKey(cfg.GithubToken),
 	)
 
-	queries := database.New(db)
+	queries := dbGen.New(db)
 
 	subsSvc := subs.NewService(subs.Deps{
 		DB:           db,

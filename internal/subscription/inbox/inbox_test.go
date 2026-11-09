@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/subscription/database"
+	"repo-watch/internal/subscription/db/dbGen"
 )
 
 func TestHandlerDiscardsInvalidPayload(t *testing.T) {
@@ -31,7 +31,7 @@ func TestHandlerRequeuesTransientDatabaseFailure(t *testing.T) {
 
 	w := &inboxWorker{
 		db: db,
-		q:  database.New(db),
+		q:  dbGen.New(db),
 	}
 
 	ack, err := w.handler(rabbitmq.EnvelopeJSON{
