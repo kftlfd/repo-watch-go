@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -157,6 +158,14 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	})
 	web.RegisterRoutes(router.Group("/"), web.Deps{
 		SubsService: subsSvc,
+	})
+
+	router.NoRoute(func(c *gin.Context) {
+		if c.Request.URL.Path == "/api" || strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			api.NotFound(c)
+		} else {
+			web.NotFound(c)
+		}
 	})
 
 	apiServer := httpserver.NewServer(httpserver.ServerDeps{

@@ -34,7 +34,7 @@ type subscribeForm struct {
 }
 
 func (h *webHandler) handleSubscribePage(c *gin.Context) {
-	h.render(c, http.StatusOK, "subscribe.html", pageData{
+	render(c, http.StatusOK, "subscribe.html", pageData{
 		Title: "Subscribe",
 	})
 }
@@ -55,7 +55,7 @@ func (h *webHandler) handleCreateSubscription(c *gin.Context) {
 		return
 	}
 
-	h.render(c, http.StatusOK, "result.html", pageData{
+	render(c, http.StatusOK, "result.html", pageData{
 		Title:   "Check your email",
 		Message: msgCheckEmail,
 	})
@@ -66,7 +66,7 @@ func (h *webHandler) handleConfirmPage(c *gin.Context) {
 		return
 	}
 
-	h.render(c, http.StatusOK, "token.html", pageData{
+	render(c, http.StatusOK, "token.html", pageData{
 		Title:   "Confirm subscription",
 		Message: "Click the button below to confirm your subscription.",
 		Button:  "Confirm subscription",
@@ -84,14 +84,14 @@ func (h *webHandler) handleConfirmSubscription(c *gin.Context) {
 		if status == http.StatusInternalServerError {
 			httpserver.RecordError(c, "confirm subscription", err)
 		}
-		h.render(c, status, "result.html", pageData{
+		render(c, status, "result.html", pageData{
 			Title:   "Could not confirm subscription",
 			Message: message,
 		})
 		return
 	}
 
-	h.render(c, http.StatusOK, "result.html", pageData{
+	render(c, http.StatusOK, "result.html", pageData{
 		Title:   "Subscription confirmed",
 		Message: msgConfirmed,
 	})
@@ -102,7 +102,7 @@ func (h *webHandler) handleUnsubscribePage(c *gin.Context) {
 		return
 	}
 
-	h.render(c, http.StatusOK, "token.html", pageData{
+	render(c, http.StatusOK, "token.html", pageData{
 		Title:   "Unsubscribe",
 		Message: "Click the button below to stop receiving notifications for this repository.",
 		Button:  "Unsubscribe",
@@ -120,14 +120,14 @@ func (h *webHandler) handleDeactivateSubscription(c *gin.Context) {
 		if status == http.StatusInternalServerError {
 			httpserver.RecordError(c, "unsubscribe", err)
 		}
-		h.render(c, status, "result.html", pageData{
+		render(c, status, "result.html", pageData{
 			Title:   "Could not unsubscribe",
 			Message: message,
 		})
 		return
 	}
 
-	h.render(c, http.StatusOK, "result.html", pageData{
+	render(c, http.StatusOK, "result.html", pageData{
 		Title:   "Unsubscribed",
 		Message: msgUnsubscribed,
 	})
@@ -136,7 +136,7 @@ func (h *webHandler) handleDeactivateSubscription(c *gin.Context) {
 func (h *webHandler) validToken(c *gin.Context) (string, bool) {
 	token := c.Param("token")
 	if !subs.ValidateToken(token) {
-		h.render(c, http.StatusBadRequest, "result.html", pageData{
+		render(c, http.StatusBadRequest, "result.html", pageData{
 			Title:   "Invalid link",
 			Message: msgInvalidToken,
 		})
@@ -147,7 +147,7 @@ func (h *webHandler) validToken(c *gin.Context) (string, bool) {
 }
 
 func (h *webHandler) renderSubscribeError(c *gin.Context, status int, form subscribeForm, message string) {
-	h.render(c, status, "subscribe.html", pageData{
+	render(c, status, "subscribe.html", pageData{
 		Title: "Subscribe",
 		Error: message,
 		Email: form.Email,
@@ -155,11 +155,19 @@ func (h *webHandler) renderSubscribeError(c *gin.Context, status int, form subsc
 	})
 }
 
-func (h *webHandler) render(c *gin.Context, status int, name string, data pageData) {
+func render(c *gin.Context, status int, name string, data pageData) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.Status(status)
 
 	if err := templates.ExecuteTemplate(c.Writer, name, data); err != nil {
 		httpserver.RecordError(c, "render template", err)
 	}
+}
+
+func NotFound(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	render(c, http.StatusNotFound, "notfound.html", pageData{
+		Title:   "Page not found",
+		Message: "The page you requested does not exist.",
+	})
 }

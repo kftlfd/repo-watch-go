@@ -75,6 +75,7 @@ func newTestHandler(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer)
 	RegisterRoutes(router.Group("/api"), Deps{
 		SubsService: svc,
 	})
+	router.NoRoute(NotFound)
 
 	return router, logs
 }

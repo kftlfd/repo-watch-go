@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	errNotFound      = "not found"
 	errInvalidEmail  = "invalid email"
 	errInvalidInput  = "invalid email or repository"
 	errRepoNotFound  = "repository not found"
@@ -27,6 +28,10 @@ const (
 	msgConfirmed     = "subscription confirmed"
 	msgUnsubscribed  = "unsubscribed"
 )
+
+func NotFound(c *gin.Context) {
+	c.JSON(http.StatusNotFound, errorResponse{Error: errNotFound})
+}
 
 // handleCreateSubscription creates a subscription for an email address and
 // GitHub repository, then queues a confirmation email
