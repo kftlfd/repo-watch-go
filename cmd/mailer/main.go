@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -29,6 +30,10 @@ func main() {
 func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	if err := cfg.validateConfig(); err != nil {
 		return fmt.Errorf("validate config: %w", err)
+	}
+
+	if !cfg.IsDev {
+		gin.SetMode(gin.ReleaseMode)
 	}
 
 	metricsReg := prometheus.NewRegistry()
