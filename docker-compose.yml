@@ -5,12 +5,14 @@ x-app: &app
       condition: service_healthy
     rabbitmq:
       condition: service_healthy
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  env_file:
+    - .env
   environment:
     PORT_ADMIN: 4000
     POSTGRES_URL: postgres://postgres:postgres@postgres:5432
     RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-    GH_API_URL: ${GH_API_URL:-https://api.github.com}
-    GITHUB_TOKEN: ${GITHUB_TOKEN:-}
   healthcheck:
     test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:4000/ready || exit 1"]
     interval: 10s
