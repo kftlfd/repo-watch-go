@@ -1,45 +1,17 @@
+//go:build integration
+
 package rabbitmq
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"net"
-	"net/netip"
 	"testing"
 	"time"
 
-	dockercontainer "github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/api/types/network"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/rabbitmq"
+
+	"repo-watch/tests/containers"
 )
-
-func startRabbitMQ(t *testing.T, ctx context.Context) (*rabbitmq.RabbitMQContainer, string) {
-	t.Helper()
-
-	// Restarting a container with an auto-assigned host port can change the
-	// published port. Production URLs are stable, so pin the AMQP port here to
-	// keep exercising the client rather than the test harness.
-	hostPort := freeTCPPort(t)
-	container, err := rabbitmq.Run(ctx, "rabbitmq:3.13-management-alpine",
-		testcontainers.WithHostConfigModifier(func(hc *dockercontainer.HostConfig) {
-			hc.PortBindings = network.PortMap{
-				network.MustParsePort("5672/tcp"): []network.PortBinding{{
-					HostIP:   netip.MustParseAddr("127.0.0.1"),
-					HostPort: hostPort,
-				}},
-			}
-		}),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, testcontainers.TerminateContainer(container))
-	})
-
-	return container, fmt.Sprintf("amqp://guest:guest@127.0.0.1:%s", hostPort)
-}
 
 func TestClientRecoversAfterRabbitMQRestart(t *testing.T) {
 	if testing.Short() {
@@ -49,7 +21,7 @@ func TestClientRecoversAfterRabbitMQRestart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	container, amqpURL := startRabbitMQ(t, ctx)
+	container, amqpURL := containers.NewRabbitMQ(t)
 
 	client, err := Connect(ClientConfig{
 		URL:           amqpURL,
@@ -122,17 +94,4 @@ func TestClientRecoversAfterRabbitMQRestart(t *testing.T) {
 
 	publish("after-restart")
 	awaitMessage("after-restart")
-}
-
-func freeTCPPort(t *testing.T) string {
-	t.Helper()
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	require.NoError(t, err)
-
-	return port
 }

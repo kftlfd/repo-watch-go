@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/scanner/database"
+	"repo-watch/internal/scanner/db/dbGen"
 )
 
 func TestHandlerDiscardsInvalidPayload(t *testing.T) {
@@ -29,7 +29,7 @@ func TestHandlerRequeuesTransientDatabaseFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	w := &inboxWorker{q: database.New(db)}
+	w := &inboxWorker{q: dbGen.New(db)}
 
 	ack, err := w.handler(rabbitmq.EnvelopeJSON{
 		EventType: rabbitmq.EventRepositoryChanged,

@@ -7,18 +7,18 @@ import (
 	"log/slog"
 
 	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/scanner/database"
+	"repo-watch/internal/scanner/db/dbGen"
 )
 
 type Deps struct {
 	Logger         *slog.Logger
 	RabbitConsumer rabbitmq.RabbitJSONConsumer
-	Queries        *database.Queries
+	Queries        *dbGen.Queries
 }
 
 type inboxWorker struct {
 	logger   *slog.Logger
-	q        *database.Queries
+	q        *dbGen.Queries
 	consumer rabbitmq.RabbitJSONConsumer
 }
 
@@ -51,7 +51,7 @@ func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, erro
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}
 
-		err := w.q.CreateOrUpdateRepo(context.Background(), database.CreateOrUpdateRepoParams{
+		err := w.q.CreateOrUpdateRepo(context.Background(), dbGen.CreateOrUpdateRepoParams{
 			ID:            ev.RepositoryID,
 			Owner:         ev.Owner,
 			Name:          ev.Name,

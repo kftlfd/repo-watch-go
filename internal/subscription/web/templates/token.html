@@ -1,0 +1,7 @@
+{{define "token.html"}}{{template "head" .}}
+      <h1>{{.Title}}</h1>
+      <p>{{.Message}}</p>
+      <form method="post">
+        <button type="submit">{{.Button}}</button>
+      </form>
+{{template "foot" .}}{{end}}

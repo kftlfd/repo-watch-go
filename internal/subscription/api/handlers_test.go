@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"repo-watch/internal/httpserver"
 	"repo-watch/internal/subscription/subs"
 )
 
@@ -67,11 +68,16 @@ func newTestHandler(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer)
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	return NewHandler(HandlerDeps{
-		Logger:      logger,
+	router := gin.New()
+	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}))
+	router.Use(httpserver.Recovery())
+
+	RegisterRoutes(router.Group("/api"), Deps{
 		SubsService: svc,
-		Metrics:     fakeMetrics{},
-	}), logs
+	})
+	router.NoRoute(NotFound)
+
+	return router, logs
 }
 
 func doRequest(t *testing.T, h http.Handler, method, target, contentType, body string) *httptest.ResponseRecorder {
@@ -185,10 +191,11 @@ func TestSubscribeRejectsInvalidBody(t *testing.T) {
 
 func TestSubscribeMapsServiceErrors(t *testing.T) {
 	tests := []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantBody   string
+		name         string
+		err          error
+		wantStatus   int
+		wantBody     string
+		wantErrorLog bool
 	}{
 		{
 			name:       "invalid input",
@@ -215,10 +222,11 @@ func TestSubscribeMapsServiceErrors(t *testing.T) {
 			wantBody:   errRateLimited,
 		},
 		{
-			name:       "upstream",
-			err:        subs.ErrUpstreamError,
-			wantStatus: http.StatusBadGateway,
-			wantBody:   errUpstream,
+			name:         "upstream",
+			err:          subs.ErrUpstreamError,
+			wantStatus:   http.StatusBadGateway,
+			wantBody:     errUpstream,
+			wantErrorLog: true,
 		},
 	}
 
@@ -232,7 +240,11 @@ func TestSubscribeMapsServiceErrors(t *testing.T) {
 
 			require.Equal(t, tt.wantStatus, w.Code)
 			require.Equal(t, tt.wantBody, decodeError(t, w))
-			require.NotContains(t, logs.String(), "request failed")
+			if tt.wantErrorLog {
+				require.Contains(t, logs.String(), "request failed")
+			} else {
+				require.NotContains(t, logs.String(), "request failed")
+			}
 		})
 	}
 }
@@ -263,9 +275,7 @@ func TestTokenEndpointsSupportGetAndPost(t *testing.T) {
 		confirm     bool
 		wantMessage string
 	}{
-		{name: "confirm get", method: http.MethodGet, path: "/api/confirm/" + token, confirm: true, wantMessage: msgConfirmed},
 		{name: "confirm post", method: http.MethodPost, path: "/api/confirm/" + token, confirm: true, wantMessage: msgConfirmed},
-		{name: "unsubscribe get", method: http.MethodGet, path: "/api/unsubscribe/" + token, wantMessage: msgUnsubscribed},
 		{name: "unsubscribe post", method: http.MethodPost, path: "/api/unsubscribe/" + token, wantMessage: msgUnsubscribed},
 	}
 
@@ -304,7 +314,7 @@ func TestTokenEndpointsMapErrors(t *testing.T) {
 		h, _ := newTestHandler(t, svc)
 
 		for _, path := range []string{"/api/confirm/" + token, "/api/unsubscribe/" + token} {
-			w := doRequest(t, h, http.MethodGet, path, "", "")
+			w := doRequest(t, h, http.MethodPost, path, "", "")
 			require.Equal(t, http.StatusNotFound, w.Code)
 			require.Equal(t, errTokenNotFound, decodeError(t, w))
 		}
@@ -315,7 +325,7 @@ func TestTokenEndpointsMapErrors(t *testing.T) {
 		h, _ := newTestHandler(t, svc)
 
 		for _, path := range []string{"/api/confirm/not-a-token", "/api/unsubscribe/not-a-token"} {
-			w := doRequest(t, h, http.MethodGet, path, "", "")
+			w := doRequest(t, h, http.MethodPost, path, "", "")
 			require.Equal(t, http.StatusBadRequest, w.Code)
 			require.Equal(t, errInvalidToken, decodeError(t, w))
 		}
@@ -332,7 +342,7 @@ func TestTokenEndpointsMapErrors(t *testing.T) {
 		h, logs := newTestHandler(t, svc)
 
 		for _, path := range []string{"/api/confirm/" + token, "/api/unsubscribe/" + token} {
-			w := doRequest(t, h, http.MethodGet, path, "", "")
+			w := doRequest(t, h, http.MethodPost, path, "", "")
 			require.Equal(t, http.StatusInternalServerError, w.Code)
 			require.Equal(t, errInternal, decodeError(t, w))
 			require.NotContains(t, w.Body.String(), "secret token lookup failure")

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"repo-watch/internal/httpserver"
 )
 
 func TestRequestIDEchoesClientValue(t *testing.T) {
@@ -18,12 +20,12 @@ func TestRequestIDEchoesClientValue(t *testing.T) {
 		"/api/subscriptions?email=alice%40example.com",
 		nil,
 	)
-	req.Header.Set(requestIDHeader, "client-request-1")
+	req.Header.Set(httpserver.RequestIDHeader, "client-request-1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, "client-request-1", w.Header().Get(requestIDHeader))
+	require.Equal(t, "client-request-1", w.Header().Get(httpserver.RequestIDHeader))
 	require.Contains(t, logs.String(), "request_id=client-request-1")
 }
 
@@ -33,7 +35,7 @@ func TestRequestIDGeneratedWhenMissing(t *testing.T) {
 	w := doRequest(t, h, http.MethodGet, "/api/subscriptions?email=alice%40example.com", "", "")
 
 	require.Equal(t, http.StatusOK, w.Code)
-	require.NotEmpty(t, w.Header().Get(requestIDHeader))
+	require.NotEmpty(t, w.Header().Get(httpserver.RequestIDHeader))
 	require.Contains(t, logs.String(), "request_id=")
 }
 
@@ -47,12 +49,12 @@ func TestInternalErrorsLogRequestID(t *testing.T) {
 		strings.NewReader(`{"email":"alice@example.com","repo":"golang/go"}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(requestIDHeader, "failure-request")
+	req.Header.Set(httpserver.RequestIDHeader, "failure-request")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusInternalServerError, w.Code)
-	require.Equal(t, "failure-request", w.Header().Get(requestIDHeader))
+	require.Equal(t, "failure-request", w.Header().Get(httpserver.RequestIDHeader))
 	require.Contains(t, logs.String(), "request_id=failure-request")
 	require.Contains(t, logs.String(), "database unavailable")
 }

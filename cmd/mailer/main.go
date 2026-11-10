@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -31,6 +32,10 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		return fmt.Errorf("validate config: %w", err)
 	}
 
+	if !cfg.IsDev {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
 	metricsReg := prometheus.NewRegistry()
 	rabbitMetrics := rabbitmq.NewMetrics(metricsReg)
 
@@ -56,6 +61,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	mailerWorker, err := mailer.NewMailer(mailer.Deps{
 		Logger:         logger,
 		RabbitConsumer: rabbitConsumer,
+		BaseURL:        cfg.AppBaseURL,
 	})
 	if err != nil {
 		return fmt.Errorf("create mailer worker: %w", err)

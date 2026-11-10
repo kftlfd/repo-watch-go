@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -20,11 +21,12 @@ import (
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/api"
 	"repo-watch/internal/subscription/cleanup"
-	"repo-watch/internal/subscription/database"
-	"repo-watch/internal/subscription/database/migrations"
+	"repo-watch/internal/subscription/db/dbGen"
+	"repo-watch/internal/subscription/db/migrations"
 	"repo-watch/internal/subscription/inbox"
 	"repo-watch/internal/subscription/outbox"
 	"repo-watch/internal/subscription/subs"
+	"repo-watch/internal/subscription/web"
 	"repo-watch/internal/taskrunner"
 )
 
@@ -96,7 +98,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		github.WithApiKey(cfg.GithubToken),
 	)
 
-	queries := database.New(db)
+	queries := dbGen.New(db)
 
 	subsSvc := subs.NewService(subs.Deps{
 		DB:           db,
@@ -143,15 +145,33 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		}),
 	})
 
-	apiLogger := logger.With("module", "api_server")
+	httpLogger := logger.With("module", "http_server")
+	httpMetrics := httpserver.NewMetrics(metricsReg)
+
+	router := gin.New()
+	router.Use(httpserver.ObservabilityMiddleware(httpLogger, httpMetrics))
+	router.Use(httpserver.Recovery())
+
+	api.RegisterRoutes(router.Group("/api"), api.Deps{
+		SubsService: subsSvc,
+		DocsHost:    cfg.APIHost,
+	})
+	web.RegisterRoutes(router.Group("/"), web.Deps{
+		SubsService: subsSvc,
+	})
+
+	router.NoRoute(func(c *gin.Context) {
+		if c.Request.URL.Path == "/api" || strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			api.NotFound(c)
+		} else {
+			web.NotFound(c)
+		}
+	})
+
 	apiServer := httpserver.NewServer(httpserver.ServerDeps{
-		Port:   cfg.PortAPI,
-		Logger: apiLogger,
-		Handler: api.NewHandler(api.HandlerDeps{
-			Logger:      apiLogger,
-			SubsService: subsSvc,
-			Metrics:     api.NewMetrics(metricsReg),
-		}),
+		Port:    cfg.PortAPI,
+		Logger:  httpLogger,
+		Handler: router,
 	})
 
 	g.Go("admin server", adminServer.Start)

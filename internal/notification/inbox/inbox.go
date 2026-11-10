@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"repo-watch/internal/notification/database"
+	"repo-watch/internal/notification/db/dbGen"
 	"repo-watch/internal/notification/outbox"
 	"repo-watch/internal/rabbitmq"
 )
@@ -14,12 +14,12 @@ import (
 type Deps struct {
 	Logger         *slog.Logger
 	RabbitConsumer rabbitmq.RabbitJSONConsumer
-	Queries        *database.Queries
+	Queries        *dbGen.Queries
 }
 
 type inboxWorker struct {
 	logger   *slog.Logger
-	q        *database.Queries
+	q        *dbGen.Queries
 	consumer rabbitmq.RabbitJSONConsumer
 }
 
@@ -51,7 +51,7 @@ func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, erro
 		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}
-		if err := w.q.CreateOrUpdateSubscription(context.Background(), database.CreateOrUpdateSubscriptionParams{
+		if err := w.q.CreateOrUpdateSubscription(context.Background(), dbGen.CreateOrUpdateSubscriptionParams{
 			Email:         ev.Email,
 			RepositoryID:  ev.RepositoryID,
 			Active:        ev.Active,
@@ -74,7 +74,7 @@ func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, erro
 		if err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("marshal payload: %w", err)
 		}
-		if err := w.q.CreateNewReleaseOutboxNotifications(context.Background(), database.CreateNewReleaseOutboxNotificationsParams{
+		if err := w.q.CreateNewReleaseOutboxNotifications(context.Background(), dbGen.CreateNewReleaseOutboxNotificationsParams{
 			RepositoryID: ev.RepositoryID,
 			Tag:          ev.Tag,
 			Payload:      payload,
@@ -92,7 +92,7 @@ func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, erro
 		if err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("marshal payload: %w", err)
 		}
-		if err := w.q.DeactivateSubsForRepoAndNotifySubs(context.Background(), database.DeactivateSubsForRepoAndNotifySubsParams{
+		if err := w.q.DeactivateSubsForRepoAndNotifySubs(context.Background(), dbGen.DeactivateSubsForRepoAndNotifySubsParams{
 			RepositoryID: ev.RepositoryID,
 			Tag:          "repo_removed:" + msg.EventID,
 			Payload:      payload,

@@ -1,23 +1,23 @@
 version: "2"
 
 sql:
-  - schema: "internal/subscription/database/migrations"
-    queries: "internal/subscription/database/queries"
+  - schema: "internal/subscription/db/migrations"
+    queries: "internal/subscription/db/queries"
     engine: "postgresql"
     gen:
       go:
-        out: "internal/subscription/database"
+        out: "internal/subscription/db/dbGen"
 
-  - schema: "internal/scanner/database/migrations"
-    queries: "internal/scanner/database/queries"
+  - schema: "internal/scanner/db/migrations"
+    queries: "internal/scanner/db/queries"
     engine: "postgresql"
     gen:
       go:
-        out: "internal/scanner/database"
+        out: "internal/scanner/db/dbGen"
 
-  - schema: "internal/notification/database/migrations"
-    queries: "internal/notification/database/queries"
+  - schema: "internal/notification/db/migrations"
+    queries: "internal/notification/db/queries"
     engine: "postgresql"
     gen:
       go:
-        out: "internal/notification/database"
+        out: "internal/notification/db/dbGen"

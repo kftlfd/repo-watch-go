@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  # - job_name: prometheus
+  #   static_configs:
+  #     - targets: ['localhost:9090']
+
+  - job_name: repo-watch-subscription
+    static_configs:
+      - targets: ["host.docker.internal:4010"]
+
+  - job_name: repo-watch-scanner
+    static_configs:
+      - targets: ["host.docker.internal:4020"]
+
+  - job_name: repo-watch-notification
+    static_configs:
+      - targets: ["host.docker.internal:4030"]
+
+  - job_name: repo-watch-mailer
+    static_configs:
+      - targets: ["host.docker.internal:4040"]

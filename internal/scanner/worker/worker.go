@@ -11,7 +11,7 @@ import (
 
 	"repo-watch/internal/github"
 	"repo-watch/internal/rabbitmq"
-	"repo-watch/internal/scanner/database"
+	"repo-watch/internal/scanner/db/dbGen"
 )
 
 type GithubClient interface {
@@ -40,7 +40,7 @@ type Deps struct {
 	Cfg          Config
 	Logger       *slog.Logger
 	DB           *sql.DB
-	Queries      *database.Queries
+	Queries      *dbGen.Queries
 	Publisher    rabbitmq.RabbitJSONPublisher
 	GithubClient GithubClient
 	Metrics      Metrics
@@ -50,7 +50,7 @@ type scannerWorker struct {
 	cfg    Config
 	logger *slog.Logger
 	db     *sql.DB
-	q      *database.Queries
+	q      *dbGen.Queries
 	pub    rabbitmq.RabbitJSONPublisher
 	gh     GithubClient
 	met    Metrics
@@ -96,7 +96,7 @@ func persistenceContext(ctx context.Context) (context.Context, context.CancelFun
 // fetchLatestTag retries transient GitHub failures and rate limits that come
 // with a usable retry hint. Rate limits without a hint are not retried inline:
 // the repo stays leased and is picked up again after the lease expires.
-func (w *scannerWorker) fetchLatestTag(ctx context.Context, repo database.Repository) (string, error) {
+func (w *scannerWorker) fetchLatestTag(ctx context.Context, repo dbGen.Repository) (string, error) {
 	attempts := w.cfg.GithubMaxAttempts
 	if attempts < 1 {
 		attempts = defaultGithubMaxAttempts
@@ -170,7 +170,7 @@ func (w *scannerWorker) DoScanIteration() error {
 	ctx, cancel := context.WithTimeout(context.Background(), w.cfg.IterationTimeout)
 	defer cancel()
 
-	batch, err := w.q.GetReposScanBatch(ctx, database.GetReposScanBatchParams{
+	batch, err := w.q.GetReposScanBatch(ctx, dbGen.GetReposScanBatchParams{
 		Limit: w.cfg.BatchSize,
 		LeasedUntil: sql.NullTime{
 			Valid: true,
@@ -225,7 +225,7 @@ func (w *scannerWorker) DoScanIteration() error {
 	return nil
 }
 
-func (w *scannerWorker) updateRepo(ctx context.Context, repo database.Repository, latestTag string) error {
+func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, latestTag string) error {
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -234,7 +234,7 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo database.Repository
 
 	qtx := w.q.WithTx(tx)
 
-	if err := qtx.MarkRepoProcessed(ctx, database.MarkRepoProcessedParams{
+	if err := qtx.MarkRepoProcessed(ctx, dbGen.MarkRepoProcessedParams{
 		ID:            repo.ID,
 		LatestSeenTag: latestTag,
 	}); err != nil {
@@ -242,7 +242,7 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo database.Repository
 	}
 
 	if repo.LatestSeenTag != latestTag {
-		_, err := qtx.CreateRelease(ctx, database.CreateReleaseParams{
+		_, err := qtx.CreateRelease(ctx, dbGen.CreateReleaseParams{
 			RepositoryID: repo.ID,
 			Tag:          latestTag,
 		})
@@ -261,7 +261,7 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo database.Repository
 			return fmt.Errorf("marshal outbox payload json: %w", err)
 		}
 
-		_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
+		_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
 			EventType: rabbitmq.EventReleaseDetected,
 			Payload:   payload,
 		})
@@ -298,7 +298,7 @@ func (w *scannerWorker) removeRepo(ctx context.Context, repoID string) error {
 		return fmt.Errorf("mark repo inactive: %w", err)
 	}
 
-	_, err = qtx.CreateOutboxRow(ctx, database.CreateOutboxRowParams{
+	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
 		EventType: rabbitmq.EventRepositoryRemoved,
 		Payload:   payload,
 	})

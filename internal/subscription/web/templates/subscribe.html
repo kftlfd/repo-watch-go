@@ -1,0 +1,16 @@
+{{define "subscribe.html"}}{{template "head" .}}
+      <h1>Subscribe to GitHub releases</h1>
+      <p>Get an email when a GitHub repository publishes a new release.</p>
+      {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+      <form method="post" action="/subscribe">
+        <label>
+          Email
+          <input type="email" name="email" value="{{.Email}}" autocomplete="email" required />
+        </label>
+        <label>
+          Repository
+          <input type="text" name="repo" value="{{.Repo}}" placeholder="owner/name" required />
+        </label>
+        <button type="submit">Subscribe</button>
+      </form>
+{{template "foot" .}}{{end}}
