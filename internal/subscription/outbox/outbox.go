@@ -34,7 +34,7 @@ type subscriptionOutbox struct {
 	q *dbGen.Queries
 }
 
-func NewSubsctiptionOutbox(queries *dbGen.Queries) dispatcher.Store {
+func NewSubscriptionOutbox(queries *dbGen.Queries) dispatcher.Store {
 	return &subscriptionOutbox{q: queries}
 }
 

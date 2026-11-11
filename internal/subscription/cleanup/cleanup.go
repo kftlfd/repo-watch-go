@@ -12,7 +12,6 @@ import (
 const (
 	tokenRetention           = subs.ConfirmTokenValidity
 	publishedOutboxRetention = time.Hour * 24 * 14
-	processedEventsRetention = time.Hour * 24 * 14
 )
 
 func CreateCleanupTasks(queries *dbGen.Queries, now func() time.Time) []taskrunner.Task {

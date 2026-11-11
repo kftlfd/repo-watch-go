@@ -85,15 +85,15 @@ func getEventPayload(row dbGen.Outbox) (eventType string, payload json.RawMessag
 	}
 }
 
-type scannerOutbox struct {
+type notificationOutbox struct {
 	q *dbGen.Queries
 }
 
 func NewScannerOutbox(queries *dbGen.Queries) dispatcher.Store {
-	return &scannerOutbox{q: queries}
+	return &notificationOutbox{q: queries}
 }
 
-func (s *scannerOutbox) GetNextBatch(ctx context.Context, batchSize int32, leasedUntil time.Time) ([]dispatcher.Row, error) {
+func (s *notificationOutbox) GetNextBatch(ctx context.Context, batchSize int32, leasedUntil time.Time) ([]dispatcher.Row, error) {
 	res, err := s.q.GetNotificationsBatch(ctx, dbGen.GetNotificationsBatchParams{
 		Limit: batchSize,
 		LeasedUntil: sql.NullTime{
@@ -132,11 +132,11 @@ func (s *scannerOutbox) GetNextBatch(ctx context.Context, batchSize int32, lease
 	return out, nil
 }
 
-func (s *scannerOutbox) MarkPublished(ctx context.Context, ids []int32) error {
+func (s *notificationOutbox) MarkPublished(ctx context.Context, ids []int32) error {
 	return s.q.MarkOutboxPublished(ctx, ids)
 }
 
-func (s *scannerOutbox) RecordFailure(
+func (s *notificationOutbox) RecordFailure(
 	ctx context.Context,
 	id int32,
 	lastError string,
@@ -162,7 +162,7 @@ func (s *scannerOutbox) RecordFailure(
 	}, nil
 }
 
-func (s *scannerOutbox) PendingStats(ctx context.Context) (dispatcher.PendingStats, error) {
+func (s *notificationOutbox) PendingStats(ctx context.Context) (dispatcher.PendingStats, error) {
 	row, err := s.q.GetOutboxPendingStats(ctx)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
