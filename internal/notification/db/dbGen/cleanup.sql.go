@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+const deleteFailedOutbox = `-- name: DeleteFailedOutbox :execrows
+DELETE FROM outbox
+WHERE failed_at IS NOT NULL
+    AND failed_at < $1::timestamptz
+`
+
+func (q *Queries) DeleteFailedOutbox(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteFailedOutbox, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deletePublishedOutbox = `-- name: DeletePublishedOutbox :execrows
 DELETE FROM outbox
 WHERE published_at IS NOT NULL

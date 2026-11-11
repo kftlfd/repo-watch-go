@@ -19,7 +19,7 @@ SELECT
 FROM subscriptions
 WHERE subscriptions.repository_id = $1
     AND subscriptions.active = true
-ON CONFLICT (email, repository_id, tag) DO NOTHING;
+ON CONFLICT (email, repository_id, tag) WHERE failed_at IS NULL DO NOTHING;
 
 -- name: GetNotificationsBatch :many
 WITH candidates AS (
