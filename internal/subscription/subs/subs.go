@@ -81,7 +81,7 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	qtx := s.q.WithTx(tx)
 
@@ -160,7 +160,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	qtx := s.q.WithTx(tx)
 
@@ -274,7 +274,7 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	qtx := s.q.WithTx(tx)
 

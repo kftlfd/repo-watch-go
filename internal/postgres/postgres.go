@@ -25,7 +25,7 @@ func EnsureDbExists(ctx context.Context, baseDbUrl, dbName string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	exists := false
 

@@ -230,7 +230,7 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, l
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	qtx := w.q.WithTx(tx)
 
@@ -282,7 +282,7 @@ func (w *scannerWorker) removeRepo(ctx context.Context, repoID string) error {
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	qtx := w.q.WithTx(tx)
 

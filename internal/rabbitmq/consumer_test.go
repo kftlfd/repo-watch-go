@@ -213,7 +213,7 @@ func TestHandleDeliveryReturnsInvalidAckAsFatalDefect(t *testing.T) {
 		},
 	)
 
-	require.ErrorIs(t, err, invalidAck)
+	require.ErrorIs(t, err, errInvalidAck)
 	require.True(t, isFatalConsumeError(err))
 	require.False(t, acknowledger.ackCalled)
 	require.False(t, acknowledger.nackCalled)
@@ -225,8 +225,8 @@ func TestHandleDeliveryReturnsInvalidAckAsFatalDefect(t *testing.T) {
 }
 
 func TestIsFatalConsumeError(t *testing.T) {
-	require.True(t, isFatalConsumeError(invalidAck))
-	require.True(t, isFatalConsumeError(fmt.Errorf("wrapped: %w", invalidAck)))
+	require.True(t, isFatalConsumeError(errInvalidAck))
+	require.True(t, isFatalConsumeError(fmt.Errorf("wrapped: %w", errInvalidAck)))
 
 	require.True(t, isFatalConsumeError(&amqp091.Error{
 		Code:   amqp091.NotFound,

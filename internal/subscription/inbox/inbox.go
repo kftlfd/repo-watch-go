@@ -60,7 +60,7 @@ func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, erro
 		if err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("begin tx: %w", err)
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 
 		qtx := w.q.WithTx(tx)
 		if err := qtx.MarkRepositoryRemoved(context.Background(), ev.RepositoryID); err != nil {
