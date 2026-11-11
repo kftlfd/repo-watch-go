@@ -188,7 +188,7 @@ func (w *scannerWorker) DoScanIteration() error {
 
 			if errors.Is(err, github.ErrNotFound) {
 				writeCtx, cancel := persistenceContext(ctx)
-				err := w.removeRepo(writeCtx, repo.ID)
+				err := w.removeRepo(writeCtx, repo)
 				cancel()
 				if err != nil {
 					return err
@@ -277,7 +277,7 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, l
 	return nil
 }
 
-func (w *scannerWorker) removeRepo(ctx context.Context, repoID string) error {
+func (w *scannerWorker) removeRepo(ctx context.Context, repo dbGen.Repository) error {
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -286,16 +286,29 @@ func (w *scannerWorker) removeRepo(ctx context.Context, repoID string) error {
 
 	qtx := w.q.WithTx(tx)
 
+	affected, err := qtx.MarkRepoInactive(ctx, dbGen.MarkRepoInactiveParams{
+		ID:            repo.ID,
+		ActiveVersion: repo.ActiveVersion,
+	})
+	if err != nil {
+		return fmt.Errorf("mark repo inactive: %w", err)
+	}
+
+	// A newer repository.changed event landed while the scan was in flight.
+	// Leave its state alone; the next scan will decide whether to remove it.
+	if affected == 0 {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit repo removal: %w", err)
+		}
+		return nil
+	}
+
 	payload, err := json.Marshal(
 		rabbitmq.EventRepositoryRemovedPayload{
-			RepositoryID: repoID,
+			RepositoryID: repo.ID,
 		})
 	if err != nil {
 		return fmt.Errorf("marshal outbox payload json: %w", err)
-	}
-
-	if err := qtx.MarkRepoInactive(ctx, repoID); err != nil {
-		return fmt.Errorf("mark repo inactive: %w", err)
 	}
 
 	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{

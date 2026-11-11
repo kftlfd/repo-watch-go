@@ -34,13 +34,14 @@ FROM candidates
 WHERE repositories.id = candidates.id
 RETURNING repositories.*;
 
--- name: MarkRepoInactive :exec
+-- name: MarkRepoInactive :execrows
 UPDATE repositories
 SET
     active = false,
-    active_version = 0,
     updated_at = now()
-WHERE id = $1;
+WHERE id = $1
+    AND active = true
+    AND active_version = $2;
 
 -- name: MarkRepoProcessed :exec
 UPDATE repositories

@@ -143,6 +143,19 @@ func getRepoState(t *testing.T, ctx context.Context, db *sql.DB, repoID string) 
 	return tag, active
 }
 
+func getRepoActiveVersion(t *testing.T, ctx context.Context, db *sql.DB, repoID string) int32 {
+	t.Helper()
+
+	var version int32
+	require.NoError(t, db.QueryRowContext(
+		ctx,
+		`SELECT active_version FROM repositories WHERE id = $1`,
+		repoID,
+	).Scan(&version))
+
+	return version
+}
+
 func installRepoUpdateFailure(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 
@@ -343,6 +356,115 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		require.False(t, active)
 
 		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, eventCount)
+	})
+}
+
+func TestScannerWorkerRemovalVersioning(t *testing.T) {
+	db := newScannerTestDB(t)
+
+	ctx := context.Background()
+	repoID := "owner/repository"
+
+	t.Run("removal keeps the last applied version", func(t *testing.T) {
+		resetScannerDB(t, ctx, db.DB)
+		insertRepo(t, ctx, db.Queries, repoID, "v1.0.0")
+
+		gh := &fakeGithub{err: github.ErrNotFound}
+		w, _ := newTestWorker(db.DB, db.Queries, gh, testConfig())
+
+		require.NoError(t, w.DoScanIteration())
+
+		tag, active := getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v1.0.0", tag)
+		require.False(t, active)
+		require.Equal(t, int32(1), getRepoActiveVersion(t, ctx, db.DB, repoID))
+
+		// A delayed event carrying the version that was current before removal
+		// must not reactivate the repo.
+		require.NoError(t, db.Queries.CreateOrUpdateRepo(ctx, dbGen.CreateOrUpdateRepoParams{
+			ID:            repoID,
+			Owner:         "owner",
+			Name:          "repository",
+			LatestSeenTag: "v1.0.0",
+			Active:        true,
+			ActiveVersion: 1,
+		}))
+
+		tag, active = getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v1.0.0", tag)
+		require.False(t, active)
+		require.Equal(t, int32(1), getRepoActiveVersion(t, ctx, db.DB, repoID))
+
+		// A genuinely newer subscription event still reactivates it.
+		require.NoError(t, db.Queries.CreateOrUpdateRepo(ctx, dbGen.CreateOrUpdateRepoParams{
+			ID:            repoID,
+			Owner:         "owner",
+			Name:          "repository",
+			LatestSeenTag: "v2.0.0",
+			Active:        true,
+			ActiveVersion: 2,
+		}))
+
+		tag, active = getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v2.0.0", tag)
+		require.True(t, active)
+		require.Equal(t, int32(2), getRepoActiveVersion(t, ctx, db.DB, repoID))
+
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, eventCount)
+	})
+
+	t.Run("removal is skipped when the version changes during the scan", func(t *testing.T) {
+		resetScannerDB(t, ctx, db.DB)
+		insertRepo(t, ctx, db.Queries, repoID, "v1.0.0")
+
+		calls := 0
+		gh := funcGithub(func(context.Context, string, string) (string, error) {
+			calls++
+			if calls == 1 {
+				require.NoError(t, db.Queries.CreateOrUpdateRepo(context.Background(), dbGen.CreateOrUpdateRepoParams{
+					ID:            repoID,
+					Owner:         "owner",
+					Name:          "repository",
+					LatestSeenTag: "v1.0.0",
+					Active:        true,
+					ActiveVersion: 2,
+				}))
+			}
+			return "", github.ErrNotFound
+		})
+		w, _ := newTestWorker(db.DB, db.Queries, gh, testConfig())
+
+		require.NoError(t, w.DoScanIteration())
+
+		tag, active := getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v1.0.0", tag)
+		require.True(t, active)
+		require.Equal(t, int32(2), getRepoActiveVersion(t, ctx, db.DB, repoID))
+
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
+		require.NoError(t, err)
+		require.Zero(t, eventCount)
+
+		// Once the lease expires, the next scan uses the new version and
+		// removes the repo.
+		_, err = db.DB.ExecContext(ctx,
+			`UPDATE repositories SET leased_until = now() - interval '1 second' WHERE id = $1`,
+			repoID,
+		)
+		require.NoError(t, err)
+
+		require.NoError(t, w.DoScanIteration())
+
+		tag, active = getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v1.0.0", tag)
+		require.False(t, active)
+		require.Equal(t, int32(2), getRepoActiveVersion(t, ctx, db.DB, repoID))
+
+		eventCount, err = db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, eventCount)
 	})

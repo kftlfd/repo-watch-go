@@ -248,18 +248,27 @@ func (q *Queries) MarkOutboxPublished(ctx context.Context, ids []int32) error {
 	return err
 }
 
-const markRepoInactive = `-- name: MarkRepoInactive :exec
+const markRepoInactive = `-- name: MarkRepoInactive :execrows
 UPDATE repositories
 SET
     active = false,
-    active_version = 0,
     updated_at = now()
 WHERE id = $1
+    AND active = true
+    AND active_version = $2
 `
 
-func (q *Queries) MarkRepoInactive(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, markRepoInactive, id)
-	return err
+type MarkRepoInactiveParams struct {
+	ID            string
+	ActiveVersion int32
+}
+
+func (q *Queries) MarkRepoInactive(ctx context.Context, arg MarkRepoInactiveParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markRepoInactive, arg.ID, arg.ActiveVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const markRepoProcessed = `-- name: MarkRepoProcessed :exec
