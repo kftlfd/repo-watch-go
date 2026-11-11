@@ -85,12 +85,12 @@ func (q *Queries) CreateOutboxRow(ctx context.Context, arg CreateOutboxRowParams
 	return i, err
 }
 
-const createRelease = `-- name: CreateRelease :one
+const createRelease = `-- name: CreateRelease :execrows
 INSERT INTO releases
     (repository_id, tag)
 VALUES
     ($1, $2)
-RETURNING id, repository_id, tag, created_at
+ON CONFLICT (repository_id, tag) DO NOTHING
 `
 
 type CreateReleaseParams struct {
@@ -98,16 +98,12 @@ type CreateReleaseParams struct {
 	Tag          string
 }
 
-func (q *Queries) CreateRelease(ctx context.Context, arg CreateReleaseParams) (Release, error) {
-	row := q.db.QueryRowContext(ctx, createRelease, arg.RepositoryID, arg.Tag)
-	var i Release
-	err := row.Scan(
-		&i.ID,
-		&i.RepositoryID,
-		&i.Tag,
-		&i.CreatedAt,
-	)
-	return i, err
+func (q *Queries) CreateRelease(ctx context.Context, arg CreateReleaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createRelease, arg.RepositoryID, arg.Tag)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getEventTypeCount = `-- name: GetEventTypeCount :one

@@ -16,7 +16,8 @@ CREATE TABLE releases (
     id SERIAL PRIMARY KEY,
     repository_id TEXT NOT NULL REFERENCES repositories (id),
     tag TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (repository_id, tag)
 );
 
 CREATE INDEX releases_created_at_idx ON releases (created_at);

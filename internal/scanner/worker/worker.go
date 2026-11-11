@@ -242,7 +242,7 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, l
 	}
 
 	if repo.LatestSeenTag != latestTag {
-		_, err := qtx.CreateRelease(ctx, dbGen.CreateReleaseParams{
+		inserted, err := qtx.CreateRelease(ctx, dbGen.CreateReleaseParams{
 			RepositoryID: repo.ID,
 			Tag:          latestTag,
 		})
@@ -250,23 +250,25 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, l
 			return fmt.Errorf("create release: %w", err)
 		}
 
-		payload, err := json.Marshal(
-			rabbitmq.EventReleaseDetectedPayload{
-				RepositoryID: repo.ID,
-				Owner:        repo.Owner,
-				Name:         repo.Name,
-				Tag:          latestTag,
-			})
-		if err != nil {
-			return fmt.Errorf("marshal outbox payload json: %w", err)
-		}
+		if inserted > 0 {
+			payload, err := json.Marshal(
+				rabbitmq.EventReleaseDetectedPayload{
+					RepositoryID: repo.ID,
+					Owner:        repo.Owner,
+					Name:         repo.Name,
+					Tag:          latestTag,
+				})
+			if err != nil {
+				return fmt.Errorf("marshal outbox payload json: %w", err)
+			}
 
-		_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-			EventType: rabbitmq.EventReleaseDetected,
-			Payload:   payload,
-		})
-		if err != nil {
-			return fmt.Errorf("insert into outbox: %w", err)
+			_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
+				EventType: rabbitmq.EventReleaseDetected,
+				Payload:   payload,
+			})
+			if err != nil {
+				return fmt.Errorf("insert into outbox: %w", err)
+			}
 		}
 	}
 

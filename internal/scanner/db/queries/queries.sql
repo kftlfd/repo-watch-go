@@ -50,12 +50,12 @@ SET
     last_checked_at = now()
 WHERE id = $1;
 
--- name: CreateRelease :one
+-- name: CreateRelease :execrows
 INSERT INTO releases
     (repository_id, tag)
 VALUES
     ($1, $2)
-RETURNING *;
+ON CONFLICT (repository_id, tag) DO NOTHING;
 
 -- name: CreateOutboxRow :one
 INSERT INTO

@@ -470,6 +470,82 @@ func TestScannerWorkerRemovalVersioning(t *testing.T) {
 	})
 }
 
+func TestScannerWorkerReleaseIdempotency(t *testing.T) {
+	db := newScannerTestDB(t)
+
+	ctx := context.Background()
+	repoID := "owner/repository"
+
+	leaseRepo := func(t *testing.T) dbGen.Repository {
+		t.Helper()
+
+		repos, err := db.Queries.GetReposScanBatch(ctx, dbGen.GetReposScanBatchParams{
+			Limit: 10,
+			LeasedUntil: sql.NullTime{
+				Valid: true,
+				Time:  time.Now().Add(time.Minute),
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, repos, 1)
+
+		return repos[0]
+	}
+
+	t.Run("stale snapshot does not duplicate release or event", func(t *testing.T) {
+		resetScannerDB(t, ctx, db.DB)
+		insertRepo(t, ctx, db.Queries, repoID, "v1.0.0")
+
+		// Two scanners can lease the same pre-release snapshot when a lease
+		// expires during the GitHub call. Both then try to record the same tag.
+		staleRepo := leaseRepo(t)
+		w, _ := newTestWorker(db.DB, db.Queries, &fakeGithub{}, testConfig())
+
+		require.NoError(t, w.updateRepo(ctx, staleRepo, "v2.0.0"))
+		require.NoError(t, w.updateRepo(ctx, staleRepo, "v2.0.0"))
+
+		var releaseCount int
+		require.NoError(t, db.DB.QueryRowContext(ctx, `SELECT count(*) FROM releases`).Scan(&releaseCount))
+		require.Equal(t, 1, releaseCount)
+
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, eventCount)
+
+		tag, active := getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v2.0.0", tag)
+		require.True(t, active)
+	})
+
+	t.Run("existing release is not re-emitted", func(t *testing.T) {
+		resetScannerDB(t, ctx, db.DB)
+		insertRepo(t, ctx, db.Queries, repoID, "v1.0.0")
+
+		_, err := db.Queries.CreateRelease(ctx, dbGen.CreateReleaseParams{
+			RepositoryID: repoID,
+			Tag:          "v2.0.0",
+		})
+		require.NoError(t, err)
+
+		staleRepo := leaseRepo(t)
+		w, _ := newTestWorker(db.DB, db.Queries, &fakeGithub{}, testConfig())
+
+		require.NoError(t, w.updateRepo(ctx, staleRepo, "v2.0.0"))
+
+		var releaseCount int
+		require.NoError(t, db.DB.QueryRowContext(ctx, `SELECT count(*) FROM releases`).Scan(&releaseCount))
+		require.Equal(t, 1, releaseCount)
+
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		require.NoError(t, err)
+		require.Zero(t, eventCount)
+
+		tag, active := getRepoState(t, ctx, db.DB, repoID)
+		require.Equal(t, "v2.0.0", tag)
+		require.True(t, active)
+	})
+}
+
 func TestScannerWorkerGithubRetries(t *testing.T) {
 	db := newScannerTestDB(t)
 
