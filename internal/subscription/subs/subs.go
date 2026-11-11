@@ -15,11 +15,13 @@ import (
 )
 
 var (
-	ErrInvalidInput         = errors.New("invalid input")
-	ErrRepoNotFound         = errors.New("repo not found")
-	ErrRateLimit            = errors.New("rate limit")
-	ErrUpstreamError        = errors.New("upstream error")
-	ErrSubscriptionConflict = errors.New("active subscription already exist")
+	ErrInvalidInput                = errors.New("invalid input")
+	ErrRepoNotFound                = errors.New("repo not found")
+	ErrRateLimit                   = errors.New("rate limit")
+	ErrUpstreamError               = errors.New("upstream error")
+	ErrSubscriptionConflict        = errors.New("active subscription already exist")
+	ErrSubscriptionAlreadyActive   = errors.New("subscription already active")
+	ErrSubscriptionAlreadyInactive = errors.New("subscription already inactive")
 )
 
 type GithubClient interface {
@@ -120,7 +122,7 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return err
 	}
 
-	_, err = qtx.CreateToken(ctx, dbGen.CreateTokenParams{
+	_, err = qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
 		SubscriptionID: dbSub.ID,
 		TokenType:      TokenTypeConfirm,
 		TokenVal:       tokenVal,
@@ -173,18 +175,29 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	err = qtx.DeleteTokenById(ctx, t.ID)
-	if err != nil {
-		return err
-	}
-
 	sub, err := qtx.GetSubscriptionByID(ctx, t.SubscriptionID)
 	if err != nil {
 		return err
 	}
 
-	repo, err := qtx.GetRepositoryByID(ctx, sub.RepositoryID)
+	updSub, err := qtx.ActivateSubscription(ctx, sub.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err = qtx.DeleteTokensBySubscriptionAndType(ctx, dbGen.DeleteTokensBySubscriptionAndTypeParams{
+			SubscriptionID: sub.ID,
+			TokenType:      TokenTypeConfirm,
+		}); err != nil {
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		return ErrSubscriptionAlreadyActive
+	}
 	if err != nil {
+		return err
+	}
+
+	if err = qtx.DeleteTokensBySubscription(ctx, sub.ID); err != nil {
 		return err
 	}
 
@@ -193,7 +206,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	unsubToken, err := qtx.CreateToken(ctx, dbGen.CreateTokenParams{
+	unsubToken, err := qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
 		SubscriptionID: sub.ID,
 		TokenType:      TokenTypeUnsub,
 		TokenVal:       unsubTokenVal,
@@ -202,12 +215,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	updSub, err := qtx.ActivateSubscription(ctx, sub.ID)
-	if err != nil {
-		return err
-	}
-
-	updRepo, err := qtx.IncrementRepositoryActiveCount(ctx, repo.ID)
+	updRepo, err := qtx.IncrementRepositoryActiveCount(ctx, sub.RepositoryID)
 	if err != nil {
 		return err
 	}
@@ -227,7 +235,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	if updRepo.ActiveVersion != repo.ActiveVersion {
+	if updRepo.ActiveSubscriptionsCount == 1 {
 		if err = saveToOutbox(ctx, qtx,
 			rabbitmq.EventRepositoryChanged,
 			rabbitmq.EventRepositoryChangedPayload{
@@ -286,27 +294,33 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	err = qtx.DeleteTokenById(ctx, t.ID)
-	if err != nil {
-		return err
-	}
-
 	sub, err := qtx.GetSubscriptionByID(ctx, t.SubscriptionID)
 	if err != nil {
 		return err
 	}
 
-	repo, err := qtx.GetRepositoryByID(ctx, sub.RepositoryID)
-	if err != nil {
-		return err
-	}
-
 	updSub, err := qtx.DeactivateSubscription(ctx, sub.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err = qtx.DeleteTokensBySubscriptionAndType(ctx, dbGen.DeleteTokensBySubscriptionAndTypeParams{
+			SubscriptionID: sub.ID,
+			TokenType:      TokenTypeUnsub,
+		}); err != nil {
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		return ErrSubscriptionAlreadyInactive
+	}
 	if err != nil {
 		return err
 	}
 
-	updRepo, err := qtx.DecrementRepositoryActiveCount(ctx, repo.ID)
+	if err = qtx.DeleteTokensBySubscription(ctx, sub.ID); err != nil {
+		return err
+	}
+
+	updRepo, err := qtx.DecrementRepositoryActiveCount(ctx, sub.RepositoryID)
 	if err != nil {
 		return err
 	}
@@ -325,7 +339,7 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	if updRepo.ActiveVersion != repo.ActiveVersion {
+	if updRepo.ActiveSubscriptionsCount == 0 {
 		if err = saveToOutbox(ctx, qtx,
 			rabbitmq.EventRepositoryChanged,
 			rabbitmq.EventRepositoryChangedPayload{

@@ -19,6 +19,7 @@ SET
     END,
     updated_at = now()
 WHERE id = $1
+    AND active = false
 RETURNING id, email, repository_id, active, active_version, created_at, updated_at
 `
 
@@ -98,6 +99,7 @@ SET
     END,
     updated_at = now()
 WHERE id = $1
+    AND active = true
 RETURNING id, email, repository_id, active, active_version, created_at, updated_at
 `
 

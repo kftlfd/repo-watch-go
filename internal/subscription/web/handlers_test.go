@@ -341,6 +341,22 @@ func TestTokenErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("already settled", func(t *testing.T) {
+		svc := &fakeSubsService{
+			confirmErr:    subs.ErrSubscriptionAlreadyActive,
+			deactivateErr: subs.ErrSubscriptionAlreadyInactive,
+		}
+		h, _ := newTestRouter(t, svc)
+
+		w := doRequest(t, h, http.MethodPost, "/confirm/"+validToken, "", "")
+		require.Equal(t, http.StatusConflict, w.Code)
+		require.Contains(t, w.Body.String(), msgAlreadyConfirmed)
+
+		w = doRequest(t, h, http.MethodPost, "/unsubscribe/"+validToken, "", "")
+		require.Equal(t, http.StatusConflict, w.Code)
+		require.Contains(t, w.Body.String(), msgAlreadyUnsubscribed)
+	})
+
 	t.Run("internal error", func(t *testing.T) {
 		svc := &fakeSubsService{
 			confirmErr:    errors.New("secret token lookup failure"),

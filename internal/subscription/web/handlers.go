@@ -10,13 +10,15 @@ import (
 )
 
 const (
-	msgInvalidInput = "Enter a valid email address and repository in owner/name format."
-	msgCheckEmail   = "Check your email to confirm your subscription."
-	msgConfirmed    = "Subscription confirmed."
-	msgUnsubscribed = "You have been unsubscribed."
-	msgInvalidToken = "This link is invalid."
-	msgTokenUsed    = "This link is invalid or has already been used."
-	msgInternal     = "Something went wrong. Please try again later."
+	msgInvalidInput        = "Enter a valid email address and repository in owner/name format."
+	msgCheckEmail          = "Check your email to confirm your subscription."
+	msgConfirmed           = "Subscription confirmed."
+	msgUnsubscribed        = "You have been unsubscribed."
+	msgInvalidToken        = "This link is invalid."
+	msgTokenUsed           = "This link is invalid or has already been used."
+	msgAlreadyConfirmed    = "This subscription is already confirmed."
+	msgAlreadyUnsubscribed = "This subscription is already unsubscribed."
+	msgInternal            = "Something went wrong. Please try again later."
 )
 
 type pageData struct {

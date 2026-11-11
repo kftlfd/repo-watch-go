@@ -27,6 +27,7 @@ SET
     END,
     updated_at = now()
 WHERE id = $1
+    AND active = false
 RETURNING *;
 
 -- name: DeactivateSubscription :one
@@ -39,6 +40,7 @@ SET
     END,
     updated_at = now()
 WHERE id = $1
+    AND active = true
 RETURNING *;
 
 -- name: ListSubscriptionsByEmail :many

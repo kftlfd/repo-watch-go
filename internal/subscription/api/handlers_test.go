@@ -320,6 +320,22 @@ func TestTokenEndpointsMapErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("already settled", func(t *testing.T) {
+		svc := &fakeSubsService{
+			confirmErr:    subs.ErrSubscriptionAlreadyActive,
+			deactivateErr: subs.ErrSubscriptionAlreadyInactive,
+		}
+		h, _ := newTestHandler(t, svc)
+
+		w := doRequest(t, h, http.MethodPost, "/api/confirm/"+token, "", "")
+		require.Equal(t, http.StatusConflict, w.Code)
+		require.Equal(t, errAlreadyConfirmed, decodeError(t, w))
+
+		w = doRequest(t, h, http.MethodPost, "/api/unsubscribe/"+token, "", "")
+		require.Equal(t, http.StatusConflict, w.Code)
+		require.Equal(t, errAlreadyUnsubscribed, decodeError(t, w))
+	})
+
 	t.Run("malformed token", func(t *testing.T) {
 		svc := &fakeSubsService{}
 		h, _ := newTestHandler(t, svc)
