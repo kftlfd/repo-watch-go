@@ -15,23 +15,25 @@ import (
 
 const createOutboxRow = `-- name: CreateOutboxRow :one
 INSERT INTO
-    outbox (event_type, payload)
+    outbox (event_type, event_version, payload)
 VALUES
-    ($1, $2)
-RETURNING id, event_type, payload, created_at, leased_until, published_at, attempts, last_error, failed_at
+    ($1, $2, $3)
+RETURNING id, event_type, event_version, payload, created_at, leased_until, published_at, attempts, last_error, failed_at
 `
 
 type CreateOutboxRowParams struct {
-	EventType string
-	Payload   json.RawMessage
+	EventType    string
+	EventVersion int32
+	Payload      json.RawMessage
 }
 
 func (q *Queries) CreateOutboxRow(ctx context.Context, arg CreateOutboxRowParams) (Outbox, error) {
-	row := q.db.QueryRowContext(ctx, createOutboxRow, arg.EventType, arg.Payload)
+	row := q.db.QueryRowContext(ctx, createOutboxRow, arg.EventType, arg.EventVersion, arg.Payload)
 	var i Outbox
 	err := row.Scan(
 		&i.ID,
 		&i.EventType,
+		&i.EventVersion,
 		&i.Payload,
 		&i.CreatedAt,
 		&i.LeasedUntil,
@@ -71,7 +73,7 @@ UPDATE outbox
 SET leased_until = $2
 FROM candidates
 WHERE outbox.id = candidates.id
-RETURNING outbox.id, outbox.event_type, outbox.payload, outbox.created_at, outbox.leased_until, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
+RETURNING outbox.id, outbox.event_type, outbox.event_version, outbox.payload, outbox.created_at, outbox.leased_until, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
 `
 
 type GetOutboxBatchParams struct {
@@ -91,6 +93,7 @@ func (q *Queries) GetOutboxBatch(ctx context.Context, arg GetOutboxBatchParams) 
 		if err := rows.Scan(
 			&i.ID,
 			&i.EventType,
+			&i.EventVersion,
 			&i.Payload,
 			&i.CreatedAt,
 			&i.LeasedUntil,

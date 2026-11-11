@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"repo-watch/internal/emails"
+	"repo-watch/internal/events"
 	"repo-watch/internal/github"
-	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/db/dbGen"
 )
 
@@ -140,8 +140,8 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 	}
 
 	if err = saveToOutbox(ctx, qtx,
-		rabbitmq.EventEmailQueued,
-		rabbitmq.EventEmailQueuedPayload{
+		events.EventEmailQueued,
+		events.EventEmailQueuedPayload{
 			Recipient: emailInfo.email,
 			Type:      emails.EmailConfirmSubscription,
 			Data:      emailData,
@@ -221,8 +221,8 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 	}
 
 	if err = saveToOutbox(ctx, qtx,
-		rabbitmq.EventSubscriptionChanged,
-		rabbitmq.EventSubscriptionChangedPayload{
+		events.EventSubscriptionChanged,
+		events.EventSubscriptionChangedPayload{
 			SubscriptionID: updSub.ID,
 			RepositoryID:   updRepo.ID,
 			Email:          updSub.Email,
@@ -237,8 +237,8 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 
 	if updRepo.ActiveSubscriptionsCount == 1 {
 		if err = saveToOutbox(ctx, qtx,
-			rabbitmq.EventRepositoryChanged,
-			rabbitmq.EventRepositoryChangedPayload{
+			events.EventRepositoryChanged,
+			events.EventRepositoryChangedPayload{
 				RepositoryID:  updRepo.ID,
 				Owner:         updRepo.Owner,
 				Name:          updRepo.Name,
@@ -260,8 +260,8 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 	}
 
 	if err = saveToOutbox(ctx, qtx,
-		rabbitmq.EventEmailQueued,
-		rabbitmq.EventEmailQueuedPayload{
+		events.EventEmailQueued,
+		events.EventEmailQueuedPayload{
 			Recipient: updSub.Email,
 			Type:      emails.EmailSubscribed,
 			Data:      emailData,
@@ -326,8 +326,8 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 	}
 
 	if err = saveToOutbox(ctx, qtx,
-		rabbitmq.EventSubscriptionChanged,
-		rabbitmq.EventSubscriptionChangedPayload{
+		events.EventSubscriptionChanged,
+		events.EventSubscriptionChangedPayload{
 			SubscriptionID: updSub.ID,
 			RepositoryID:   updRepo.ID,
 			Email:          updSub.Email,
@@ -341,8 +341,8 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 
 	if updRepo.ActiveSubscriptionsCount == 0 {
 		if err = saveToOutbox(ctx, qtx,
-			rabbitmq.EventRepositoryChanged,
-			rabbitmq.EventRepositoryChangedPayload{
+			events.EventRepositoryChanged,
+			events.EventRepositoryChangedPayload{
 				RepositoryID:  updRepo.ID,
 				Owner:         updRepo.Owner,
 				Name:          updRepo.Name,
@@ -364,8 +364,8 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 	}
 
 	if err = saveToOutbox(ctx, qtx,
-		rabbitmq.EventEmailQueued,
-		rabbitmq.EventEmailQueuedPayload{
+		events.EventEmailQueued,
+		events.EventEmailQueuedPayload{
 			Recipient: updSub.Email,
 			Type:      emails.EmailUnsubscribed,
 			Data:      emailData,
@@ -396,14 +396,20 @@ func (s *service) GetSubscriptionsList(ctx context.Context, email string) ([]str
 }
 
 func saveToOutbox(ctx context.Context, qtx *dbGen.Queries, eventType string, eventPayload any) error {
+	eventVersion, ok := events.CurrentVersion(eventType)
+	if !ok {
+		return fmt.Errorf("unknown event type: %q", eventType)
+	}
+
 	jsonData, err := json.Marshal(eventPayload)
 	if err != nil {
 		return fmt.Errorf("json marshal event: %w", err)
 	}
 
 	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-		EventType: eventType,
-		Payload:   jsonData,
+		EventType:    eventType,
+		EventVersion: eventVersion,
+		Payload:      jsonData,
 	})
 
 	return err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/db/dbGen"
 )
@@ -46,11 +47,15 @@ func (w *inboxWorker) Start(ctx context.Context) error {
 	return w.consumer.ConsumeJSON(ctx, rabbitmq.QueueSubscriptionInbox, w.handler)
 }
 
-func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, error) {
+func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
+	if err := events.Validate(msg.EventType, msg.Version); err != nil {
+		return rabbitmq.NackDiscard, err
+	}
+
 	switch msg.EventType {
 
-	case rabbitmq.EventRepositoryRemoved:
-		var ev rabbitmq.EventRepositoryRemovedPayload
+	case events.EventRepositoryRemoved:
+		var ev events.EventRepositoryRemovedPayload
 		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}

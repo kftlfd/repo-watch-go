@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/notification/db/dbGen"
 	"repo-watch/internal/notification/outbox"
 	"repo-watch/internal/rabbitmq"
@@ -43,11 +44,15 @@ func (w *inboxWorker) Start(ctx context.Context) error {
 	return w.consumer.ConsumeJSON(ctx, rabbitmq.QueueNotificationInbox, w.handler)
 }
 
-func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, error) {
+func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
+	if err := events.Validate(msg.EventType, msg.Version); err != nil {
+		return rabbitmq.NackDiscard, err
+	}
+
 	switch msg.EventType {
 
-	case rabbitmq.EventSubscriptionChanged:
-		var ev rabbitmq.EventSubscriptionChangedPayload
+	case events.EventSubscriptionChanged:
+		var ev events.EventSubscriptionChangedPayload
 		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}
@@ -62,8 +67,8 @@ func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, erro
 		}
 		return rabbitmq.Ack, nil
 
-	case rabbitmq.EventReleaseDetected:
-		var ev rabbitmq.EventReleaseDetectedPayload
+	case events.EventReleaseDetected:
+		var ev events.EventReleaseDetectedPayload
 		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}
@@ -83,8 +88,8 @@ func (w *inboxWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, erro
 		}
 		return rabbitmq.Ack, nil
 
-	case rabbitmq.EventRepositoryRemoved:
-		var ev rabbitmq.EventRepositoryRemovedPayload
+	case events.EventRepositoryRemoved:
+		var ev events.EventRepositoryRemovedPayload
 		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}

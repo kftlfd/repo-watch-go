@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"repo-watch/internal/dispatcher"
-	"repo-watch/internal/rabbitmq"
+	"repo-watch/internal/events"
 	"repo-watch/internal/scanner/db/dbGen"
 )
 
 var validEventTypes = []string{
-	rabbitmq.EventReleaseDetected,
-	rabbitmq.EventRepositoryRemoved,
+	events.EventReleaseDetected,
+	events.EventRepositoryRemoved,
 }
 
 func getEventID(rowID int32) string {
@@ -55,6 +55,7 @@ func (s *scannerOutbox) GetNextBatch(ctx context.Context, batchSize int32, lease
 			ID:            row.ID,
 			EventType:     row.EventType,
 			EventID:       getEventID(row.ID),
+			Version:       row.EventVersion,
 			InvalidReason: validateEventType(row.EventType),
 			CreatedAt:     row.CreatedAt,
 			Payload:       row.Payload,

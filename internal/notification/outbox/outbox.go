@@ -10,8 +10,8 @@ import (
 
 	"repo-watch/internal/dispatcher"
 	"repo-watch/internal/emails"
+	"repo-watch/internal/events"
 	"repo-watch/internal/notification/db/dbGen"
-	"repo-watch/internal/rabbitmq"
 )
 
 func getEventID(rowID int32) string {
@@ -25,13 +25,17 @@ type NewReleasePayload struct {
 
 type RepoRemovedPayload struct{}
 
-func getEventPayload(row dbGen.Outbox) (eventType string, payload json.RawMessage, err error) {
+// getEventPayload maps an internal notification row to the event that is
+// published. The event payload is built at dispatch time from current code, so
+// its schema version is the current one rather than something stored with the
+// row.
+func getEventPayload(row dbGen.Outbox) (eventType string, eventVersion int32, payload json.RawMessage, err error) {
 	switch row.Type {
 
 	case "new_release":
 		var data NewReleasePayload
 		if err := json.Unmarshal(row.Payload, &data); err != nil {
-			return "", nil, fmt.Errorf("invalid payload: %w", err)
+			return "", 0, nil, fmt.Errorf("invalid payload: %w", err)
 		}
 
 		emailData, err := json.Marshal(emails.EmailNewReleaseNotificationPayload{
@@ -42,46 +46,46 @@ func getEventPayload(row dbGen.Outbox) (eventType string, payload json.RawMessag
 			UnsubToken: row.UnsubToken,
 		})
 		if err != nil {
-			return "", nil, fmt.Errorf("failed to marshal email data: %w", err)
+			return "", 0, nil, fmt.Errorf("failed to marshal email data: %w", err)
 		}
 
-		eventPayload, err := json.Marshal(rabbitmq.EventEmailQueuedPayload{
+		eventPayload, err := json.Marshal(events.EventEmailQueuedPayload{
 			Recipient: row.Email,
 			Type:      emails.EmailNewReleaseNotification,
 			Data:      emailData,
 		})
 		if err != nil {
-			return "", nil, fmt.Errorf("failed to marshal event payload: %w", err)
+			return "", 0, nil, fmt.Errorf("failed to marshal event payload: %w", err)
 		}
 
-		return rabbitmq.EventEmailQueued, eventPayload, nil
+		return events.EventEmailQueued, events.VersionEmailQueued, eventPayload, nil
 
 	case "repo_removed":
 		var data RepoRemovedPayload
 		if err := json.Unmarshal(row.Payload, &data); err != nil {
-			return "", nil, fmt.Errorf("invalid payload: %w", err)
+			return "", 0, nil, fmt.Errorf("invalid payload: %w", err)
 		}
 
 		emailData, err := json.Marshal(emails.EmailRepositoryRemovedPayload{
 			RepoID: row.RepositoryID,
 		})
 		if err != nil {
-			return "", nil, fmt.Errorf("failed to marshal email data: %w", err)
+			return "", 0, nil, fmt.Errorf("failed to marshal email data: %w", err)
 		}
 
-		eventPayload, err := json.Marshal(rabbitmq.EventEmailQueuedPayload{
+		eventPayload, err := json.Marshal(events.EventEmailQueuedPayload{
 			Recipient: row.Email,
 			Type:      emails.EmailRepositoryRemoved,
 			Data:      emailData,
 		})
 		if err != nil {
-			return "", nil, fmt.Errorf("failed to marshal event payload: %w", err)
+			return "", 0, nil, fmt.Errorf("failed to marshal event payload: %w", err)
 		}
 
-		return rabbitmq.EventEmailQueued, eventPayload, nil
+		return events.EventEmailQueued, events.VersionEmailQueued, eventPayload, nil
 
 	default:
-		return "", nil, fmt.Errorf("invalid event type: %q", row.Type)
+		return "", 0, nil, fmt.Errorf("invalid event type: %q", row.Type)
 	}
 }
 
@@ -118,11 +122,12 @@ func (s *notificationOutbox) GetNextBatch(ctx context.Context, batchSize int32, 
 			InvalidReason: "",
 		}
 
-		eventType, payload, err := getEventPayload(row)
+		eventType, eventVersion, payload, err := getEventPayload(row)
 		if err != nil {
 			outboxRow.InvalidReason = err.Error()
 		} else {
 			outboxRow.EventType = eventType
+			outboxRow.Version = eventVersion
 			outboxRow.Payload = payload
 		}
 

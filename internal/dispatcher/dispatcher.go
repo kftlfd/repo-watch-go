@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/utils"
 )
@@ -28,6 +29,7 @@ type Row struct {
 	ID        int32
 	EventType string
 	EventID   string
+	Version   int32
 	Payload   json.RawMessage
 	CreatedAt time.Time
 	Attempts  int32
@@ -341,9 +343,10 @@ func (d *Dispatcher) publishWithRetry(
 		// Detach from shutdown cancellation so an in-flight publisher confirm
 		// can finish; the lease deadline keeps the wait bounded.
 		publishCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), leaseDeadline)
-		err = d.pub.PublishJSON(publishCtx, rabbitmq.EnvelopeJSON{
+		err = d.pub.PublishJSON(publishCtx, events.Envelope{
 			EventID:   row.EventID,
 			EventType: row.EventType,
+			Version:   row.Version,
 			CreatedAt: row.CreatedAt,
 			Payload:   row.Payload,
 		})

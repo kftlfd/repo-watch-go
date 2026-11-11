@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/rabbitmq"
 )
 
@@ -92,13 +93,13 @@ func (s *fakeStore) RecordFailure(
 }
 
 type fakePublisher struct {
-	calls     []rabbitmq.EnvelopeJSON
+	calls     []events.Envelope
 	errs      []error
 	alwaysErr error
 	onPublish func(context.Context)
 }
 
-func (p *fakePublisher) PublishJSON(ctx context.Context, msg rabbitmq.EnvelopeJSON) error {
+func (p *fakePublisher) PublishJSON(ctx context.Context, msg events.Envelope) error {
 	idx := len(p.calls)
 	p.calls = append(p.calls, msg)
 	if p.onPublish != nil {
@@ -215,8 +216,9 @@ func TestNewDispatcherAppliesDefaults(t *testing.T) {
 func testRow(id int32) Row {
 	return Row{
 		ID:            id,
-		EventType:     "valid",
+		EventType:     events.EventEmailQueued,
 		EventID:       "event-" + strconv.Itoa(int(id)),
+		Version:       events.VersionEmailQueued,
 		InvalidReason: "",
 		Payload:       json.RawMessage(`{}`),
 		CreatedAt:     time.Now(),
@@ -234,6 +236,8 @@ func TestRunIterationPublishesBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, processed)
 	require.Len(t, pub.calls, 2)
+	require.Equal(t, events.EventEmailQueued, pub.calls[0].EventType)
+	require.Equal(t, events.VersionEmailQueued, pub.calls[0].Version)
 	require.Equal(t, []int32{1, 2}, store.markPublishedIDs)
 	require.Empty(t, store.failures)
 	require.Equal(t, 2, metrics.published)
@@ -511,7 +515,7 @@ type blockingPublisher struct {
 	release chan struct{}
 }
 
-func (p *blockingPublisher) PublishJSON(ctx context.Context, _ rabbitmq.EnvelopeJSON) error {
+func (p *blockingPublisher) PublishJSON(ctx context.Context, _ events.Envelope) error {
 	close(p.started)
 	<-p.release
 

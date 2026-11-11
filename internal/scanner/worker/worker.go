@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/github"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/db/dbGen"
@@ -252,7 +253,7 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, l
 
 		if inserted > 0 {
 			payload, err := json.Marshal(
-				rabbitmq.EventReleaseDetectedPayload{
+				events.EventReleaseDetectedPayload{
 					RepositoryID: repo.ID,
 					Owner:        repo.Owner,
 					Name:         repo.Name,
@@ -263,8 +264,9 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, l
 			}
 
 			_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-				EventType: rabbitmq.EventReleaseDetected,
-				Payload:   payload,
+				EventType:    events.EventReleaseDetected,
+				EventVersion: events.VersionReleaseDetected,
+				Payload:      payload,
 			})
 			if err != nil {
 				return fmt.Errorf("insert into outbox: %w", err)
@@ -306,7 +308,7 @@ func (w *scannerWorker) removeRepo(ctx context.Context, repo dbGen.Repository) e
 	}
 
 	payload, err := json.Marshal(
-		rabbitmq.EventRepositoryRemovedPayload{
+		events.EventRepositoryRemovedPayload{
 			RepositoryID: repo.ID,
 		})
 	if err != nil {
@@ -314,8 +316,9 @@ func (w *scannerWorker) removeRepo(ctx context.Context, repo dbGen.Repository) e
 	}
 
 	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-		EventType: rabbitmq.EventRepositoryRemoved,
-		Payload:   payload,
+		EventType:    events.EventRepositoryRemoved,
+		EventVersion: events.VersionRepositoryRemoved,
+		Payload:      payload,
 	})
 	if err != nil {
 		return fmt.Errorf("insert into outbox: %w", err)

@@ -13,9 +13,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/github"
 	"repo-watch/internal/postgres"
-	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/db/dbGen"
 	"repo-watch/internal/scanner/db/migrations"
 	"repo-watch/tests/containers"
@@ -143,6 +143,19 @@ func getRepoState(t *testing.T, ctx context.Context, db *sql.DB, repoID string) 
 	return tag, active
 }
 
+func getOutboxEventVersion(t *testing.T, ctx context.Context, db *sql.DB, eventType string) int32 {
+	t.Helper()
+
+	var version int32
+	require.NoError(t, db.QueryRowContext(
+		ctx,
+		`SELECT event_version FROM outbox WHERE event_type = $1`,
+		eventType,
+	).Scan(&version))
+
+	return version
+}
+
 func getRepoActiveVersion(t *testing.T, ctx context.Context, db *sql.DB, repoID string) int32 {
 	t.Helper()
 
@@ -245,9 +258,10 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		require.Equal(t, "v2.0.0", tag)
 		require.True(t, active)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventReleaseDetected)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, eventCount)
+		require.Equal(t, events.VersionReleaseDetected, getOutboxEventVersion(t, ctx, db.DB, events.EventReleaseDetected))
 	})
 
 	t.Run("repo update commit failure rolls back state", func(t *testing.T) {
@@ -270,7 +284,7 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		require.NoError(t, db.DB.QueryRowContext(ctx, `SELECT count(*) FROM releases`).Scan(&releaseCount))
 		require.Zero(t, releaseCount)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventReleaseDetected)
 		require.NoError(t, err)
 		require.Zero(t, eventCount)
 	})
@@ -290,7 +304,7 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		require.Equal(t, "v1.0.0", tag)
 		require.True(t, active)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventRepositoryRemoved)
 		require.NoError(t, err)
 		require.Zero(t, eventCount)
 	})
@@ -310,7 +324,7 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		require.Equal(t, "v1.0.0", tag)
 		require.True(t, active)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventRepositoryRemoved)
 		require.NoError(t, err)
 		require.Zero(t, eventCount)
 	})
@@ -334,7 +348,7 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		require.Equal(t, "v2.0.0", tag)
 		require.True(t, active)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventReleaseDetected)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, eventCount)
 	})
@@ -355,7 +369,7 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		require.Equal(t, "v1.0.0", tag)
 		require.False(t, active)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventRepositoryRemoved)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, eventCount)
 	})
@@ -412,9 +426,10 @@ func TestScannerWorkerRemovalVersioning(t *testing.T) {
 		require.True(t, active)
 		require.Equal(t, int32(2), getRepoActiveVersion(t, ctx, db.DB, repoID))
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventRepositoryRemoved)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, eventCount)
+		require.Equal(t, events.VersionRepositoryRemoved, getOutboxEventVersion(t, ctx, db.DB, events.EventRepositoryRemoved))
 	})
 
 	t.Run("removal is skipped when the version changes during the scan", func(t *testing.T) {
@@ -445,7 +460,7 @@ func TestScannerWorkerRemovalVersioning(t *testing.T) {
 		require.True(t, active)
 		require.Equal(t, int32(2), getRepoActiveVersion(t, ctx, db.DB, repoID))
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventRepositoryRemoved)
 		require.NoError(t, err)
 		require.Zero(t, eventCount)
 
@@ -464,7 +479,7 @@ func TestScannerWorkerRemovalVersioning(t *testing.T) {
 		require.False(t, active)
 		require.Equal(t, int32(2), getRepoActiveVersion(t, ctx, db.DB, repoID))
 
-		eventCount, err = db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryRemoved)
+		eventCount, err = db.Queries.GetEventTypeCount(ctx, events.EventRepositoryRemoved)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, eventCount)
 	})
@@ -508,7 +523,7 @@ func TestScannerWorkerReleaseIdempotency(t *testing.T) {
 		require.NoError(t, db.DB.QueryRowContext(ctx, `SELECT count(*) FROM releases`).Scan(&releaseCount))
 		require.Equal(t, 1, releaseCount)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventReleaseDetected)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, eventCount)
 
@@ -536,7 +551,7 @@ func TestScannerWorkerReleaseIdempotency(t *testing.T) {
 		require.NoError(t, db.DB.QueryRowContext(ctx, `SELECT count(*) FROM releases`).Scan(&releaseCount))
 		require.Equal(t, 1, releaseCount)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventReleaseDetected)
 		require.NoError(t, err)
 		require.Zero(t, eventCount)
 
@@ -574,7 +589,7 @@ func TestScannerWorkerGithubRetries(t *testing.T) {
 		require.Equal(t, "v2.0.0", tag)
 		require.True(t, active)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventReleaseDetected)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, eventCount)
 	})
@@ -624,7 +639,7 @@ func TestScannerWorkerGithubRetries(t *testing.T) {
 		require.Equal(t, "v1.0.0", tag)
 		require.True(t, active)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventReleaseDetected)
 		require.NoError(t, err)
 		require.Zero(t, eventCount)
 
@@ -661,7 +676,7 @@ func TestScannerWorkerGithubRetries(t *testing.T) {
 			require.True(t, active)
 		}
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventReleaseDetected)
 		require.NoError(t, err)
 		require.Zero(t, eventCount)
 	})
@@ -685,7 +700,7 @@ func TestScannerWorkerGithubRetries(t *testing.T) {
 		require.Equal(t, "v1.0.0", tag)
 		require.True(t, active)
 
-		eventCount, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventReleaseDetected)
+		eventCount, err := db.Queries.GetEventTypeCount(ctx, events.EventReleaseDetected)
 		require.NoError(t, err)
 		require.Zero(t, eventCount)
 	})

@@ -11,15 +11,16 @@ import (
 )
 
 type Outbox struct {
-	ID          int32
-	EventType   string
-	Payload     json.RawMessage
-	CreatedAt   time.Time
-	LeasedUntil sql.NullTime
-	PublishedAt sql.NullTime
-	Attempts    int32
-	LastError   string
-	FailedAt    sql.NullTime
+	ID           int32
+	EventType    string
+	EventVersion int32
+	Payload      json.RawMessage
+	CreatedAt    time.Time
+	LeasedUntil  sql.NullTime
+	PublishedAt  sql.NullTime
+	Attempts     int32
+	LastError    string
+	FailedAt     sql.NullTime
 }
 
 type Repository struct {

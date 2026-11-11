@@ -12,9 +12,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/github"
 	"repo-watch/internal/postgres"
-	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/db/dbGen"
 	"repo-watch/internal/subscription/db/migrations"
 	"repo-watch/internal/subscription/subs"
@@ -88,7 +88,7 @@ func TestCreateSubscription(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	evCnt, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventEmailQueued)
+	evCnt, err := db.Queries.GetEventTypeCount(ctx, events.EventEmailQueued)
 	require.NoError(t, err)
 	require.True(t, evCnt == 1)
 }
@@ -297,9 +297,9 @@ func TestConfirmSubscriptionRejectsAlreadyActive(t *testing.T) {
 
 	repoBefore, err := db.Queries.GetRepositoryByID(ctx, "owner/repository")
 	require.NoError(t, err)
-	subChangedBefore, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventSubscriptionChanged)
+	subChangedBefore, err := db.Queries.GetEventTypeCount(ctx, events.EventSubscriptionChanged)
 	require.NoError(t, err)
-	emailsBefore, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventEmailQueued)
+	emailsBefore, err := db.Queries.GetEventTypeCount(ctx, events.EventEmailQueued)
 	require.NoError(t, err)
 
 	err = svc.ConfirmSubscription(ctx, newToken)
@@ -310,11 +310,11 @@ func TestConfirmSubscriptionRejectsAlreadyActive(t *testing.T) {
 	require.Equal(t, repoBefore.ActiveSubscriptionsCount, repoAfter.ActiveSubscriptionsCount)
 	require.Equal(t, repoBefore.ActiveVersion, repoAfter.ActiveVersion)
 
-	subChangedAfter, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventSubscriptionChanged)
+	subChangedAfter, err := db.Queries.GetEventTypeCount(ctx, events.EventSubscriptionChanged)
 	require.NoError(t, err)
 	require.Equal(t, subChangedBefore, subChangedAfter)
 
-	emailsAfter, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventEmailQueued)
+	emailsAfter, err := db.Queries.GetEventTypeCount(ctx, events.EventEmailQueued)
 	require.NoError(t, err)
 	require.Equal(t, emailsBefore, emailsAfter)
 
@@ -364,15 +364,15 @@ func TestConcurrentConfirmationIncrementsRepositoryOnce(t *testing.T) {
 	require.True(t, sub.Active)
 	require.Equal(t, int32(1), sub.ActiveVersion)
 
-	subChanged, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventSubscriptionChanged)
+	subChanged, err := db.Queries.GetEventTypeCount(ctx, events.EventSubscriptionChanged)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), subChanged)
 
-	repoChanged, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryChanged)
+	repoChanged, err := db.Queries.GetEventTypeCount(ctx, events.EventRepositoryChanged)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), repoChanged)
 
-	emails, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventEmailQueued)
+	emails, err := db.Queries.GetEventTypeCount(ctx, events.EventEmailQueued)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), emails)
 }
@@ -416,15 +416,15 @@ func TestConcurrentUnsubscribeDecrementsRepositoryOnce(t *testing.T) {
 	require.False(t, sub.Active)
 	require.Equal(t, int32(2), sub.ActiveVersion)
 
-	subChanged, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventSubscriptionChanged)
+	subChanged, err := db.Queries.GetEventTypeCount(ctx, events.EventSubscriptionChanged)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), subChanged)
 
-	repoChanged, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventRepositoryChanged)
+	repoChanged, err := db.Queries.GetEventTypeCount(ctx, events.EventRepositoryChanged)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), repoChanged)
 
-	emails, err := db.Queries.GetEventTypeCount(ctx, rabbitmq.EventEmailQueued)
+	emails, err := db.Queries.GetEventTypeCount(ctx, events.EventEmailQueued)
 	require.NoError(t, err)
 	require.Equal(t, int64(3), emails)
 }

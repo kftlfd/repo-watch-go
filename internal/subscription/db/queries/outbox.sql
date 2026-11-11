@@ -1,8 +1,8 @@
 -- name: CreateOutboxRow :one
 INSERT INTO
-    outbox (event_type, payload)
+    outbox (event_type, event_version, payload)
 VALUES
-    ($1, $2)
+    ($1, $2, $3)
 RETURNING *;
 
 -- name: GetEventTypeCount :one

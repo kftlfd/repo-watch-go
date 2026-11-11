@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	"repo-watch/internal/events"
+
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/require"
 )
@@ -89,7 +91,7 @@ func TestHandleDeliveryDiscardsInvalidEnvelope(t *testing.T) {
 	err := c.handleDelivery(
 		testDelivery(acknowledger, `{"id":`),
 		"test-queue",
-		func(EnvelopeJSON) (AckType, error) {
+		func(events.Envelope) (AckType, error) {
 			called = true
 			return Ack, nil
 		},
@@ -109,7 +111,7 @@ func TestHandleDeliveryDiscardsInvalidEnvelope(t *testing.T) {
 
 func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 	wantErr := errors.New("transient database failure")
-	var got EnvelopeJSON
+	var got events.Envelope
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
 	c := newTestConsumer(t, metrics)
@@ -117,7 +119,7 @@ func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 	err := c.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
 		"test-queue",
-		func(msg EnvelopeJSON) (AckType, error) {
+		func(msg events.Envelope) (AckType, error) {
 			got = msg
 			return NackRequeue, wantErr
 		},
@@ -125,7 +127,7 @@ func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "event-1", got.EventID)
-	require.Equal(t, EventRepositoryChanged, got.EventType)
+	require.Equal(t, events.EventRepositoryChanged, got.EventType)
 	require.True(t, acknowledger.nackCalled)
 	require.True(t, acknowledger.nackRequeue)
 	require.False(t, acknowledger.ackCalled)
@@ -144,7 +146,7 @@ func TestHandleDeliveryAcksSuccessfulHandler(t *testing.T) {
 	err := c.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
 		"test-queue",
-		func(EnvelopeJSON) (AckType, error) {
+		func(events.Envelope) (AckType, error) {
 			return Ack, nil
 		},
 	)
@@ -167,7 +169,7 @@ func TestHandleDeliveryReturnsAckError(t *testing.T) {
 	err := c.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
 		"test-queue",
-		func(EnvelopeJSON) (AckType, error) {
+		func(events.Envelope) (AckType, error) {
 			return Ack, nil
 		},
 	)
@@ -184,7 +186,7 @@ func TestHandleDeliveryRequeuesAckWithErrorAsDefect(t *testing.T) {
 	err := c.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
 		"test-queue",
-		func(EnvelopeJSON) (AckType, error) {
+		func(events.Envelope) (AckType, error) {
 			return Ack, handlerErr
 		},
 	)
@@ -208,7 +210,7 @@ func TestHandleDeliveryReturnsInvalidAckAsFatalDefect(t *testing.T) {
 	err := c.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
 		"test-queue",
-		func(EnvelopeJSON) (AckType, error) {
+		func(events.Envelope) (AckType, error) {
 			return AckType("not-a-valid-ack"), nil
 		},
 	)
@@ -261,7 +263,7 @@ func TestConsumeJSONReturnsNilWhenContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.NoError(t, c.ConsumeJSON(ctx, "test-queue", func(EnvelopeJSON) (AckType, error) {
+	require.NoError(t, c.ConsumeJSON(ctx, "test-queue", func(events.Envelope) (AckType, error) {
 		return Ack, nil
 	}))
 }
@@ -273,7 +275,7 @@ func TestConsumeJSONReturnsClosedWhenClientIsClosed(t *testing.T) {
 	c, err := NewConsumer(client, testLogger(), nil)
 	require.NoError(t, err)
 
-	err = c.ConsumeJSON(context.Background(), "test-queue", func(EnvelopeJSON) (AckType, error) {
+	err = c.ConsumeJSON(context.Background(), "test-queue", func(events.Envelope) (AckType, error) {
 		return Ack, nil
 	})
 	require.ErrorIs(t, err, ErrClosed)

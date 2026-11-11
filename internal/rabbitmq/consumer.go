@@ -10,6 +10,7 @@ import (
 
 	"github.com/rabbitmq/amqp091-go"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/utils"
 )
 
@@ -61,7 +62,7 @@ func NewConsumer(
 
 // if returning Ack: err must be nil
 // for Nack types: err must be non-nil
-type JSONEventHandler func(msg EnvelopeJSON) (AckType, error)
+type JSONEventHandler func(msg events.Envelope) (AckType, error)
 
 // ConsumeJSON consumes queueName and keeps consuming until the caller's
 // context is cancelled or the client stops.
@@ -192,7 +193,7 @@ func (c *consumer) handleDelivery(
 		slog.Bool("redelivered", delivery.Redelivered),
 	}
 
-	var msg EnvelopeJSON
+	var msg events.Envelope
 	var ack AckType
 	var err error
 

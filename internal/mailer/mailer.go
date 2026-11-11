@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"repo-watch/internal/emails"
+	"repo-watch/internal/events"
 	"repo-watch/internal/rabbitmq"
 )
 
@@ -50,11 +51,16 @@ func (m *mailerWorker) Start(ctx context.Context) error {
 	return m.consumer.ConsumeJSON(ctx, rabbitmq.QueueMailerInbox, m.handler)
 }
 
-func (m *mailerWorker) handler(msg rabbitmq.EnvelopeJSON) (rabbitmq.AckType, error) {
+func (m *mailerWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
+	if err := events.Validate(msg.EventType, msg.Version); err != nil {
+		m.metrics.Failed("unsupported_event")
+		return rabbitmq.NackDiscard, err
+	}
+
 	switch msg.EventType {
 
-	case rabbitmq.EventEmailQueued:
-		var ev rabbitmq.EventEmailQueuedPayload
+	case events.EventEmailQueued:
+		var ev events.EventEmailQueuedPayload
 		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
 			m.metrics.Failed("invalid_payload")
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid JSON payload: %w", err)
@@ -81,7 +87,7 @@ type Email struct {
 
 var ErrInvalidPayloadData = errors.New("invalid payload data")
 
-func renderEmail(payload rabbitmq.EventEmailQueuedPayload, baseURL string) (Email, error) {
+func renderEmail(payload events.EventEmailQueuedPayload, baseURL string) (Email, error) {
 	switch payload.Type {
 
 	case emails.EmailConfirmSubscription:

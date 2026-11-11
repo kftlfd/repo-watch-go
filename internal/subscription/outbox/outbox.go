@@ -9,14 +9,14 @@ import (
 	"time"
 
 	"repo-watch/internal/dispatcher"
-	"repo-watch/internal/rabbitmq"
+	"repo-watch/internal/events"
 	"repo-watch/internal/subscription/db/dbGen"
 )
 
 var validEventTypes = []string{
-	rabbitmq.EventEmailQueued,
-	rabbitmq.EventSubscriptionChanged,
-	rabbitmq.EventRepositoryChanged,
+	events.EventEmailQueued,
+	events.EventSubscriptionChanged,
+	events.EventRepositoryChanged,
 }
 
 func getEventID(rowID int32) string {
@@ -56,6 +56,7 @@ func (s *subscriptionOutbox) GetNextBatch(ctx context.Context, batchSize int32, 
 			ID:            row.ID,
 			EventType:     row.EventType,
 			EventID:       getEventID(row.ID),
+			Version:       row.EventVersion,
 			InvalidReason: validateEventType(row.EventType),
 			CreatedAt:     row.CreatedAt,
 			Payload:       row.Payload,

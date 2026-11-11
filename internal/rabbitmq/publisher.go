@@ -9,10 +9,12 @@ import (
 	"sync"
 
 	"github.com/rabbitmq/amqp091-go"
+
+	"repo-watch/internal/events"
 )
 
 type RabbitJSONPublisher interface {
-	PublishJSON(context.Context, EnvelopeJSON) error
+	PublishJSON(context.Context, events.Envelope) error
 }
 
 var _ RabbitJSONPublisher = (*publisher)(nil)
@@ -51,10 +53,15 @@ func NewPublisher(client Client, logger *slog.Logger, metrics MetricsRecorder) (
 
 func (p *publisher) PublishJSON(
 	ctx context.Context,
-	msg EnvelopeJSON,
+	msg events.Envelope,
 ) error {
 	if msg.EventType == "" {
 		return fmt.Errorf("%w: missing message type", ErrInvalid)
+	}
+
+	msg.Version = events.NormalizeVersion(msg.Version)
+	if err := events.Validate(msg.EventType, msg.Version); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
 	body, err := json.Marshal(msg)

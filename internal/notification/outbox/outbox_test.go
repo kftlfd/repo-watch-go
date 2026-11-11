@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"repo-watch/internal/emails"
+	"repo-watch/internal/events"
 	"repo-watch/internal/notification/db/dbGen"
-	"repo-watch/internal/rabbitmq"
 )
 
 func TestGetPayloadRepoRemoved(t *testing.T) {
@@ -24,11 +24,12 @@ func TestGetPayloadRepoRemoved(t *testing.T) {
 		CreatedAt:    time.Now(),
 	}
 
-	evType, evPayload, err := getEventPayload(row)
+	evType, evVersion, evPayload, err := getEventPayload(row)
 	require.NoError(t, err)
-	require.Equal(t, rabbitmq.EventEmailQueued, evType)
+	require.Equal(t, events.EventEmailQueued, evType)
+	require.Equal(t, events.VersionEmailQueued, evVersion)
 
-	var event rabbitmq.EventEmailQueuedPayload
+	var event events.EventEmailQueuedPayload
 	require.NoError(t, json.Unmarshal(evPayload, &event))
 	require.Equal(t, "alice@example.com", event.Recipient)
 	require.Equal(t, emails.EmailRepositoryRemoved, event.Type)
@@ -50,11 +51,12 @@ func TestGetPayloadNewRelease(t *testing.T) {
 		CreatedAt:    time.Now(),
 	}
 
-	evType, evPayload, err := getEventPayload(row)
+	evType, evVersion, evPayload, err := getEventPayload(row)
 	require.NoError(t, err)
-	require.Equal(t, rabbitmq.EventEmailQueued, evType)
+	require.Equal(t, events.EventEmailQueued, evType)
+	require.Equal(t, events.VersionEmailQueued, evVersion)
 
-	var event rabbitmq.EventEmailQueuedPayload
+	var event events.EventEmailQueuedPayload
 	require.NoError(t, json.Unmarshal(evPayload, &event))
 	require.Equal(t, "bob@example.com", event.Recipient)
 	require.Equal(t, emails.EmailNewReleaseNotification, event.Type)
@@ -69,6 +71,6 @@ func TestGetPayloadNewRelease(t *testing.T) {
 }
 
 func TestGetPayloadUnknownType(t *testing.T) {
-	_, _, err := getEventPayload(dbGen.Outbox{Type: "unknown"})
+	_, _, _, err := getEventPayload(dbGen.Outbox{Type: "unknown"})
 	require.ErrorContains(t, err, "unknown")
 }

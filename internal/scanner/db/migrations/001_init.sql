@@ -25,6 +25,7 @@ CREATE INDEX releases_created_at_idx ON releases (created_at);
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
+    event_version INTEGER NOT NULL DEFAULT 1,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     leased_until TIMESTAMPTZ,

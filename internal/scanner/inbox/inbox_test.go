@@ -8,6 +8,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/db/dbGen"
 )
@@ -15,8 +16,8 @@ import (
 func TestHandlerDiscardsInvalidPayload(t *testing.T) {
 	w := &inboxWorker{}
 
-	ack, err := w.handler(rabbitmq.EnvelopeJSON{
-		EventType: rabbitmq.EventRepositoryChanged,
+	ack, err := w.handler(events.Envelope{
+		EventType: events.EventRepositoryChanged,
 		Payload:   json.RawMessage(`not-json`),
 	})
 
@@ -31,8 +32,8 @@ func TestHandlerRequeuesTransientDatabaseFailure(t *testing.T) {
 
 	w := &inboxWorker{q: dbGen.New(db)}
 
-	ack, err := w.handler(rabbitmq.EnvelopeJSON{
-		EventType: rabbitmq.EventRepositoryChanged,
+	ack, err := w.handler(events.Envelope{
+		EventType: events.EventRepositoryChanged,
 		Payload: json.RawMessage(`{
 			"repository_id": "owner/repo",
 			"owner": "owner",
