@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"net/mail"
 
 	"github.com/gin-gonic/gin"
 
@@ -133,7 +132,7 @@ func (h *apiHandler) handleDeactivateSubscription(c *gin.Context) {
 // handleListSubscriptions returns the active subscriptions for an email
 //
 // @Summary      List active subscriptions
-// @Description  Returns all active subscriptions for the exact email address.
+// @Description  Returns all active subscriptions for the email address (case-insensitive).
 // @Tags         Subscriptions
 // @Produce      json
 // @Param        email         query   string  true   "Email address (bare address only, for example alice@example.com)"
@@ -142,9 +141,8 @@ func (h *apiHandler) handleDeactivateSubscription(c *gin.Context) {
 // @Failure      500  {object}  errorResponse          "Internal server error"
 // @Router       /subscriptions [get]
 func (h *apiHandler) handleListSubscriptions(c *gin.Context) {
-	email := c.Query("email")
-	addr, err := mail.ParseAddress(email)
-	if err != nil || addr.Address != email {
+	email, err := subs.NormalizeEmail(c.Query("email"))
+	if err != nil {
 		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidEmail})
 		return
 	}

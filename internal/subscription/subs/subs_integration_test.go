@@ -93,6 +93,35 @@ func TestCreateSubscription(t *testing.T) {
 	require.True(t, evCnt == 1)
 }
 
+func TestEmailIsNormalized(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	svc := newTestService(db)
+
+	require.NoError(t, svc.CreateSubscription(ctx, "ALICE@Example.COM", "owner/repository"))
+
+	dbSub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+		Email:        "alice@example.com",
+		RepositoryID: "owner/repository",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "alice@example.com", dbSub.Email)
+
+	confirmToken, err := db.Queries.GetToken(ctx, dbGen.GetTokenParams{
+		SubscriptionID: dbSub.ID,
+		TokenType:      subs.TokenTypeConfirm,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.ConfirmSubscription(ctx, confirmToken.TokenVal))
+
+	repos, err := svc.GetSubscriptionsList(ctx, "ALICE@Example.com")
+	require.NoError(t, err)
+	require.Equal(t, []string{"owner/repository"}, repos)
+
+	_, err = svc.GetSubscriptionsList(ctx, "not-an-email")
+	require.ErrorIs(t, err, subs.ErrInvalidInput)
+}
+
 func TestCreateSubscriptionSkipsGithubForKnownRepository(t *testing.T) {
 	db := newTestDB(t)
 
@@ -165,6 +194,7 @@ type testService interface {
 	CreateSubscription(ctx context.Context, email, repo string) error
 	ConfirmSubscription(ctx context.Context, token string) error
 	DeactivateSubscription(ctx context.Context, token string) error
+	GetSubscriptionsList(ctx context.Context, email string) ([]string, error)
 }
 
 func newTestService(db *testDB) testService {

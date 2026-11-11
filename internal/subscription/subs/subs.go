@@ -382,6 +382,11 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 }
 
 func (s *service) GetSubscriptionsList(ctx context.Context, email string) ([]string, error) {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return nil, ErrInvalidInput
+	}
+
 	subs, err := s.q.ListSubscriptionsByEmail(ctx, email)
 	if err != nil {
 		return nil, err

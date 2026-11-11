@@ -147,7 +147,7 @@ const docTemplate = `{
         },
         "/subscriptions": {
             "get": {
-                "description": "Returns all active subscriptions for the exact email address.",
+                "description": "Returns all active subscriptions for the email address (case-insensitive).",
                 "produces": [
                     "application/json"
                 ],

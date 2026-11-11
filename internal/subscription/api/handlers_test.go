@@ -375,6 +375,7 @@ func TestListSubscriptionsValidatesEmail(t *testing.T) {
 	}{
 		{name: "missing", target: "/api/subscriptions"},
 		{name: "invalid", target: "/api/subscriptions?email=not-an-email"},
+		{name: "blank", target: "/api/subscriptions?email=" + url.QueryEscape("   ")},
 		{name: "display name", target: "/api/subscriptions?email=" + url.QueryEscape("Alice <alice@example.com>")},
 	}
 
@@ -390,6 +391,21 @@ func TestListSubscriptionsValidatesEmail(t *testing.T) {
 			require.Empty(t, svc.listEmail)
 		})
 	}
+}
+
+func TestListSubscriptionsNormalizesEmail(t *testing.T) {
+	svc := &fakeSubsService{listRepos: []string{"golang/go"}}
+	h, _ := newTestHandler(t, svc)
+
+	w := doRequest(t, h, http.MethodGet,
+		"/api/subscriptions?email="+url.QueryEscape("ALICE@Example.COM"), "", "")
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "alice@example.com", svc.listEmail)
+
+	var resp []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "alice@example.com", resp[0]["email"])
 }
 
 func TestListSubscriptionsResponseShape(t *testing.T) {
