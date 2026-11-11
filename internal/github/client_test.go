@@ -19,7 +19,7 @@ func TestClient(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/repos/owner/repo/releases/latest" {
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprint(w, `{"tag_name":"v1.0.0"}`)
+				_, _ = fmt.Fprint(w, `{"tag_name":"v1.0.0"}`)
 				return
 			}
 			w.WriteHeader(http.StatusNotFound)
@@ -37,7 +37,7 @@ func TestClient(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/repos/owner/repo/tags" {
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprint(w, `[{"name":"v1.0.0"}]`)
+				_, _ = fmt.Fprint(w, `[{"name":"v1.0.0"}]`)
 				return
 			}
 			w.WriteHeader(http.StatusNotFound)
@@ -71,7 +71,7 @@ func TestClientSendsToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"tag_name":"v1.0.0"}`)
+		_, _ = fmt.Fprint(w, `{"tag_name":"v1.0.0"}`)
 	}))
 	defer server.Close()
 
@@ -147,7 +147,7 @@ func TestClientRateLimitResponses(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, `{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`)
+			_, _ = fmt.Fprint(w, `{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`)
 		}))
 		defer server.Close()
 
@@ -161,7 +161,7 @@ func TestClientRateLimitResponses(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, `{"message":"Resource not accessible by integration"}`)
+			_, _ = fmt.Fprint(w, `{"message":"Resource not accessible by integration"}`)
 		}))
 		defer server.Close()
 

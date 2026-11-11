@@ -39,48 +39,30 @@ const docTemplate = `{
                         "description": "Subscription confirmed",
                         "schema": {
                             "$ref": "#/definitions/api.messageResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "400": {
                         "description": "Malformed token",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "404": {
-                        "description": "Token not found, already used, or expired",
+                        "description": "Token not found or expired",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Subscription is already active",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     }
                 }
@@ -116,96 +98,48 @@ const docTemplate = `{
                         "description": "Confirmation email queued",
                         "schema": {
                             "$ref": "#/definitions/api.messageResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "400": {
                         "description": "Malformed request body or invalid email/repository",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "404": {
                         "description": "Repository not found on GitHub",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "409": {
                         "description": "An active subscription already exists",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "413": {
                         "description": "Request body exceeds the 1 MiB limit",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "429": {
                         "description": "GitHub rate limit exceeded",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "502": {
                         "description": "GitHub upstream error",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     }
                 }
@@ -213,7 +147,7 @@ const docTemplate = `{
         },
         "/subscriptions": {
             "get": {
-                "description": "Returns all active subscriptions for the exact email address.",
+                "description": "Returns all active subscriptions for the email address (case-insensitive).",
                 "produces": [
                     "application/json"
                 ],
@@ -238,36 +172,18 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/api.subscriptionResponse"
                             }
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "400": {
                         "description": "Missing or invalid email",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     }
                 }
@@ -297,48 +213,30 @@ const docTemplate = `{
                         "description": "Subscription deactivated",
                         "schema": {
                             "$ref": "#/definitions/api.messageResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "400": {
                         "description": "Malformed token",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     },
                     "404": {
-                        "description": "Token not found or already used",
+                        "description": "Token not found",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Subscription is already inactive",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
-                        },
-                        "headers": {
-                            "X-Request-ID": {
-                                "type": "string",
-                                "description": "Request identifier (client-provided or generated)"
-                            }
                         }
                     }
                 }

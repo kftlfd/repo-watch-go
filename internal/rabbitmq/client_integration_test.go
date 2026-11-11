@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"repo-watch/internal/events"
 	"repo-watch/tests/containers"
 )
 
@@ -45,11 +46,11 @@ func TestClientRecoversAfterRabbitMQRestart(t *testing.T) {
 	publisher, err := NewPublisher(client, testLogger(), nil)
 	require.NoError(t, err)
 
-	received := make(chan EnvelopeJSON, 10)
+	received := make(chan events.Envelope, 10)
 	consumer, err := NewConsumer(client, testLogger(), nil)
 	require.NoError(t, err)
 	go func() {
-		_ = consumer.ConsumeJSON(ctx, QueueMailerInbox, func(msg EnvelopeJSON) (AckType, error) {
+		_ = consumer.ConsumeJSON(ctx, QueueMailerInbox, func(msg events.Envelope) (AckType, error) {
 			received <- msg
 			return Ack, nil
 		})
@@ -60,9 +61,9 @@ func TestClientRecoversAfterRabbitMQRestart(t *testing.T) {
 			publishCtx, publishCancel := context.WithTimeout(ctx, 2*time.Second)
 			defer publishCancel()
 
-			return publisher.PublishJSON(publishCtx, EnvelopeJSON{
+			return publisher.PublishJSON(publishCtx, events.Envelope{
 				EventID:   id,
-				EventType: EventEmailQueued,
+				EventType: events.EventEmailQueued,
 				Payload:   json.RawMessage(`{}`),
 			}) == nil
 		}, 30*time.Second, 100*time.Millisecond)

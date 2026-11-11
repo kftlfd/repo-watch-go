@@ -27,7 +27,8 @@ CREATE TABLE tokens (
     subscription_id INTEGER NOT NULL REFERENCES subscriptions (id),
     token_type TEXT NOT NULL,
     token_val TEXT NOT NULL UNIQUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (subscription_id, token_type)
 );
 
 CREATE INDEX tokens_confirm_created_at_idx ON tokens (created_at)
@@ -37,6 +38,7 @@ WHERE
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
+    event_version INTEGER NOT NULL DEFAULT 1,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     leased_until TIMESTAMPTZ,

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"net/mail"
 
 	"github.com/gin-gonic/gin"
 
@@ -13,20 +12,22 @@ import (
 )
 
 const (
-	errNotFound      = "not found"
-	errInvalidEmail  = "invalid email"
-	errInvalidInput  = "invalid email or repository"
-	errRepoNotFound  = "repository not found"
-	errAlreadyExists = "subscription already exists"
-	errRateLimited   = "github rate limit exceeded"
-	errUpstream      = "github upstream error"
-	errInvalidToken  = "invalid token"
-	errTokenNotFound = "token not found"
-	errInternal      = "internal server error"
-	errBodyTooLarge  = "request body too large"
-	msgCheckEmail    = "check email to confirm subscription"
-	msgConfirmed     = "subscription confirmed"
-	msgUnsubscribed  = "unsubscribed"
+	errNotFound            = "not found"
+	errInvalidEmail        = "invalid email"
+	errInvalidInput        = "invalid email or repository"
+	errRepoNotFound        = "repository not found"
+	errAlreadyExists       = "subscription already exists"
+	errRateLimited         = "github rate limit exceeded"
+	errUpstream            = "github upstream error"
+	errInvalidToken        = "invalid token"
+	errTokenNotFound       = "token not found"
+	errAlreadyConfirmed    = "subscription already confirmed"
+	errAlreadyUnsubscribed = "subscription already unsubscribed"
+	errInternal            = "internal server error"
+	errBodyTooLarge        = "request body too large"
+	msgCheckEmail          = "check email to confirm subscription"
+	msgConfirmed           = "subscription confirmed"
+	msgUnsubscribed        = "unsubscribed"
 )
 
 func NotFound(c *gin.Context) {
@@ -50,7 +51,6 @@ func NotFound(c *gin.Context) {
 // @Failure      429  {object}  errorResponse    "GitHub rate limit exceeded"
 // @Failure      500  {object}  errorResponse    "Internal server error"
 // @Failure      502  {object}  errorResponse    "GitHub upstream error"
-// @Header       all  {string}  X-Request-ID     "Request identifier (client-provided or generated)"
 // @Router       /subscribe [post]
 func (h *apiHandler) handleCreateSubscription(c *gin.Context) {
 	req := createSubscriptionRequest{}
@@ -81,9 +81,9 @@ func (h *apiHandler) handleCreateSubscription(c *gin.Context) {
 // @Param        token         path    string  true   "Confirmation token from the email"
 // @Success      200  {object}  messageResponse  "Subscription confirmed"
 // @Failure      400  {object}  errorResponse    "Malformed token"
-// @Failure      404  {object}  errorResponse    "Token not found, already used, or expired"
+// @Failure      404  {object}  errorResponse    "Token not found or expired"
+// @Failure      409  {object}  errorResponse    "Subscription is already active"
 // @Failure      500  {object}  errorResponse    "Internal server error"
-// @Header       all  {string}  X-Request-ID     "Request identifier (client-provided or generated)"
 // @Router       /confirm/{token} [post]
 func (h *apiHandler) handleConfirmSubscription(c *gin.Context) {
 	token := c.Param("token")
@@ -110,9 +110,9 @@ func (h *apiHandler) handleConfirmSubscription(c *gin.Context) {
 // @Param        token         path    string  true   "Unsubscribe token from the email (base64url-encoded, 16 bytes)"
 // @Success      200  {object}  messageResponse  "Subscription deactivated"
 // @Failure      400  {object}  errorResponse    "Malformed token"
-// @Failure      404  {object}  errorResponse    "Token not found or already used"
+// @Failure      404  {object}  errorResponse    "Token not found"
+// @Failure      409  {object}  errorResponse    "Subscription is already inactive"
 // @Failure      500  {object}  errorResponse    "Internal server error"
-// @Header       all  {string}  X-Request-ID     "Request identifier (client-provided or generated)"
 // @Router       /unsubscribe/{token} [post]
 func (h *apiHandler) handleDeactivateSubscription(c *gin.Context) {
 	token := c.Param("token")
@@ -132,19 +132,17 @@ func (h *apiHandler) handleDeactivateSubscription(c *gin.Context) {
 // handleListSubscriptions returns the active subscriptions for an email
 //
 // @Summary      List active subscriptions
-// @Description  Returns all active subscriptions for the exact email address.
+// @Description  Returns all active subscriptions for the email address (case-insensitive).
 // @Tags         Subscriptions
 // @Produce      json
 // @Param        email         query   string  true   "Email address (bare address only, for example alice@example.com)"
 // @Success      200  {array}   subscriptionResponse  "Active subscriptions; an empty array is returned when none exist"
 // @Failure      400  {object}  errorResponse          "Missing or invalid email"
 // @Failure      500  {object}  errorResponse          "Internal server error"
-// @Header       all  {string}  X-Request-ID           "Request identifier (client-provided or generated)"
 // @Router       /subscriptions [get]
 func (h *apiHandler) handleListSubscriptions(c *gin.Context) {
-	email := c.Query("email")
-	addr, err := mail.ParseAddress(email)
-	if err != nil || addr.Address != email {
+	email, err := subs.NormalizeEmail(c.Query("email"))
+	if err != nil {
 		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidEmail})
 		return
 	}
@@ -185,12 +183,16 @@ func (h *apiHandler) respondServiceError(c *gin.Context, operation string, err e
 }
 
 func (h *apiHandler) respondTokenError(c *gin.Context, operation string, err error) {
-	if errors.Is(err, sql.ErrNoRows) {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
 		c.JSON(http.StatusNotFound, errorResponse{Error: errTokenNotFound})
-		return
+	case errors.Is(err, subs.ErrSubscriptionAlreadyActive):
+		c.JSON(http.StatusConflict, errorResponse{Error: errAlreadyConfirmed})
+	case errors.Is(err, subs.ErrSubscriptionAlreadyInactive):
+		c.JSON(http.StatusConflict, errorResponse{Error: errAlreadyUnsubscribed})
+	default:
+		h.respondInternalError(c, operation, err)
 	}
-
-	h.respondInternalError(c, operation, err)
 }
 
 func (h *apiHandler) respondInternalError(c *gin.Context, operation string, err error) {

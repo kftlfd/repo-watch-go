@@ -24,9 +24,16 @@ CREATE TABLE outbox (
     published_at TIMESTAMPTZ,
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT '',
-    failed_at TIMESTAMPTZ,
-    UNIQUE(email, repository_id, tag)
+    failed_at TIMESTAMPTZ
 );
+
+CREATE UNIQUE INDEX outbox_dedupe_idx ON outbox (email, repository_id, tag)
+WHERE
+    failed_at IS NULL;
+
+CREATE INDEX outbox_failed_at_idx ON outbox (failed_at)
+WHERE
+    failed_at IS NOT NULL;
 
 CREATE INDEX outbox_retryable_idx ON outbox (id)
 WHERE
@@ -39,6 +46,10 @@ WHERE
 
 -- +goose Down
 DROP INDEX IF EXISTS outbox_published_at_idx;
+
+DROP INDEX IF EXISTS outbox_failed_at_idx;
+
+DROP INDEX IF EXISTS outbox_dedupe_idx;
 
 DROP INDEX IF EXISTS outbox_retryable_idx;
 

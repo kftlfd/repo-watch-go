@@ -9,17 +9,19 @@ import (
 	"time"
 
 	"repo-watch/internal/emails"
+	"repo-watch/internal/events"
 	"repo-watch/internal/github"
-	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/db/dbGen"
 )
 
 var (
-	ErrInvalidInput         = errors.New("invalid input")
-	ErrRepoNotFound         = errors.New("repo not found")
-	ErrRateLimit            = errors.New("rate limit")
-	ErrUpstreamError        = errors.New("upstream error")
-	ErrSubscriptionConflict = errors.New("active subscription already exist")
+	ErrInvalidInput                = errors.New("invalid input")
+	ErrRepoNotFound                = errors.New("repo not found")
+	ErrRateLimit                   = errors.New("rate limit")
+	ErrUpstreamError               = errors.New("upstream error")
+	ErrSubscriptionConflict        = errors.New("active subscription already exist")
+	ErrSubscriptionAlreadyActive   = errors.New("subscription already active")
+	ErrSubscriptionAlreadyInactive = errors.New("subscription already inactive")
 )
 
 type GithubClient interface {
@@ -81,7 +83,7 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	qtx := s.q.WithTx(tx)
 
@@ -120,7 +122,7 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return err
 	}
 
-	_, err = qtx.CreateToken(ctx, dbGen.CreateTokenParams{
+	_, err = qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
 		SubscriptionID: dbSub.ID,
 		TokenType:      TokenTypeConfirm,
 		TokenVal:       tokenVal,
@@ -138,8 +140,8 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 	}
 
 	if err = saveToOutbox(ctx, qtx,
-		rabbitmq.EventEmailQueued,
-		rabbitmq.EventEmailQueuedPayload{
+		events.EventEmailQueued,
+		events.EventEmailQueuedPayload{
 			Recipient: emailInfo.email,
 			Type:      emails.EmailConfirmSubscription,
 			Data:      emailData,
@@ -160,7 +162,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	qtx := s.q.WithTx(tx)
 
@@ -173,18 +175,29 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	err = qtx.DeleteTokenById(ctx, t.ID)
-	if err != nil {
-		return err
-	}
-
 	sub, err := qtx.GetSubscriptionByID(ctx, t.SubscriptionID)
 	if err != nil {
 		return err
 	}
 
-	repo, err := qtx.GetRepositoryByID(ctx, sub.RepositoryID)
+	updSub, err := qtx.ActivateSubscription(ctx, sub.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err = qtx.DeleteTokensBySubscriptionAndType(ctx, dbGen.DeleteTokensBySubscriptionAndTypeParams{
+			SubscriptionID: sub.ID,
+			TokenType:      TokenTypeConfirm,
+		}); err != nil {
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		return ErrSubscriptionAlreadyActive
+	}
 	if err != nil {
+		return err
+	}
+
+	if err = qtx.DeleteTokensBySubscription(ctx, sub.ID); err != nil {
 		return err
 	}
 
@@ -193,7 +206,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	unsubToken, err := qtx.CreateToken(ctx, dbGen.CreateTokenParams{
+	unsubToken, err := qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
 		SubscriptionID: sub.ID,
 		TokenType:      TokenTypeUnsub,
 		TokenVal:       unsubTokenVal,
@@ -202,19 +215,14 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	updSub, err := qtx.ActivateSubscription(ctx, sub.ID)
-	if err != nil {
-		return err
-	}
-
-	updRepo, err := qtx.IncrementRepositoryActiveCount(ctx, repo.ID)
+	updRepo, err := qtx.IncrementRepositoryActiveCount(ctx, sub.RepositoryID)
 	if err != nil {
 		return err
 	}
 
 	if err = saveToOutbox(ctx, qtx,
-		rabbitmq.EventSubscriptionChanged,
-		rabbitmq.EventSubscriptionChangedPayload{
+		events.EventSubscriptionChanged,
+		events.EventSubscriptionChangedPayload{
 			SubscriptionID: updSub.ID,
 			RepositoryID:   updRepo.ID,
 			Email:          updSub.Email,
@@ -227,10 +235,10 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	if updRepo.ActiveVersion != repo.ActiveVersion {
+	if updRepo.ActiveSubscriptionsCount == 1 {
 		if err = saveToOutbox(ctx, qtx,
-			rabbitmq.EventRepositoryChanged,
-			rabbitmq.EventRepositoryChangedPayload{
+			events.EventRepositoryChanged,
+			events.EventRepositoryChangedPayload{
 				RepositoryID:  updRepo.ID,
 				Owner:         updRepo.Owner,
 				Name:          updRepo.Name,
@@ -252,8 +260,8 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 	}
 
 	if err = saveToOutbox(ctx, qtx,
-		rabbitmq.EventEmailQueued,
-		rabbitmq.EventEmailQueuedPayload{
+		events.EventEmailQueued,
+		events.EventEmailQueuedPayload{
 			Recipient: updSub.Email,
 			Type:      emails.EmailSubscribed,
 			Data:      emailData,
@@ -274,7 +282,7 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	qtx := s.q.WithTx(tx)
 
@@ -286,34 +294,40 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	err = qtx.DeleteTokenById(ctx, t.ID)
-	if err != nil {
-		return err
-	}
-
 	sub, err := qtx.GetSubscriptionByID(ctx, t.SubscriptionID)
 	if err != nil {
 		return err
 	}
 
-	repo, err := qtx.GetRepositoryByID(ctx, sub.RepositoryID)
-	if err != nil {
-		return err
-	}
-
 	updSub, err := qtx.DeactivateSubscription(ctx, sub.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err = qtx.DeleteTokensBySubscriptionAndType(ctx, dbGen.DeleteTokensBySubscriptionAndTypeParams{
+			SubscriptionID: sub.ID,
+			TokenType:      TokenTypeUnsub,
+		}); err != nil {
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		return ErrSubscriptionAlreadyInactive
+	}
 	if err != nil {
 		return err
 	}
 
-	updRepo, err := qtx.DecrementRepositoryActiveCount(ctx, repo.ID)
+	if err = qtx.DeleteTokensBySubscription(ctx, sub.ID); err != nil {
+		return err
+	}
+
+	updRepo, err := qtx.DecrementRepositoryActiveCount(ctx, sub.RepositoryID)
 	if err != nil {
 		return err
 	}
 
 	if err = saveToOutbox(ctx, qtx,
-		rabbitmq.EventSubscriptionChanged,
-		rabbitmq.EventSubscriptionChangedPayload{
+		events.EventSubscriptionChanged,
+		events.EventSubscriptionChangedPayload{
 			SubscriptionID: updSub.ID,
 			RepositoryID:   updRepo.ID,
 			Email:          updSub.Email,
@@ -325,10 +339,10 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	if updRepo.ActiveVersion != repo.ActiveVersion {
+	if updRepo.ActiveSubscriptionsCount == 0 {
 		if err = saveToOutbox(ctx, qtx,
-			rabbitmq.EventRepositoryChanged,
-			rabbitmq.EventRepositoryChangedPayload{
+			events.EventRepositoryChanged,
+			events.EventRepositoryChangedPayload{
 				RepositoryID:  updRepo.ID,
 				Owner:         updRepo.Owner,
 				Name:          updRepo.Name,
@@ -350,8 +364,8 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 	}
 
 	if err = saveToOutbox(ctx, qtx,
-		rabbitmq.EventEmailQueued,
-		rabbitmq.EventEmailQueuedPayload{
+		events.EventEmailQueued,
+		events.EventEmailQueuedPayload{
 			Recipient: updSub.Email,
 			Type:      emails.EmailUnsubscribed,
 			Data:      emailData,
@@ -368,6 +382,11 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 }
 
 func (s *service) GetSubscriptionsList(ctx context.Context, email string) ([]string, error) {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return nil, ErrInvalidInput
+	}
+
 	subs, err := s.q.ListSubscriptionsByEmail(ctx, email)
 	if err != nil {
 		return nil, err
@@ -377,14 +396,20 @@ func (s *service) GetSubscriptionsList(ctx context.Context, email string) ([]str
 }
 
 func saveToOutbox(ctx context.Context, qtx *dbGen.Queries, eventType string, eventPayload any) error {
+	eventVersion, ok := events.CurrentVersion(eventType)
+	if !ok {
+		return fmt.Errorf("unknown event type: %q", eventType)
+	}
+
 	jsonData, err := json.Marshal(eventPayload)
 	if err != nil {
 		return fmt.Errorf("json marshal event: %w", err)
 	}
 
 	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-		EventType: eventType,
-		Payload:   jsonData,
+		EventType:    eventType,
+		EventVersion: eventVersion,
+		Payload:      jsonData,
 	})
 
 	return err

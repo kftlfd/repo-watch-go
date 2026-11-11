@@ -34,13 +34,14 @@ FROM candidates
 WHERE repositories.id = candidates.id
 RETURNING repositories.*;
 
--- name: MarkRepoInactive :exec
+-- name: MarkRepoInactive :execrows
 UPDATE repositories
 SET
     active = false,
-    active_version = 0,
     updated_at = now()
-WHERE id = $1;
+WHERE id = $1
+    AND active = true
+    AND active_version = $2;
 
 -- name: MarkRepoProcessed :exec
 UPDATE repositories
@@ -49,18 +50,18 @@ SET
     last_checked_at = now()
 WHERE id = $1;
 
--- name: CreateRelease :one
+-- name: CreateRelease :execrows
 INSERT INTO releases
     (repository_id, tag)
 VALUES
     ($1, $2)
-RETURNING *;
+ON CONFLICT (repository_id, tag) DO NOTHING;
 
 -- name: CreateOutboxRow :one
 INSERT INTO
-    outbox (event_type, payload)
+    outbox (event_type, event_version, payload)
 VALUES
-    ($1, $2)
+    ($1, $2, $3)
 RETURNING *;
 
 -- name: GetEventTypeCount :one

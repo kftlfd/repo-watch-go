@@ -60,7 +60,7 @@ func (c *staticCache) get(name string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	sum := sha256.New()
 	if _, err := io.Copy(sum, f); err != nil {
@@ -91,7 +91,7 @@ func (h *webHandler) handleStatic(c *gin.Context) {
 		staticNotFound(c)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	content, ok := f.(io.ReadSeeker)
 	if !ok {

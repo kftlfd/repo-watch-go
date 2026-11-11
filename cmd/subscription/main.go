@@ -108,7 +108,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 
 	outboxDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherDeps{
 		Logger:    logger.With("module", "subscription_outbox"),
-		Store:     outbox.NewSubsctiptionOutbox(queries),
+		Store:     outbox.NewSubscriptionOutbox(queries),
 		Publisher: rabbitPublisher,
 		Metrics:   dispatcher.NewMetrics(metricsReg),
 	})

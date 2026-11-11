@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"repo-watch/internal/emails"
-	"repo-watch/internal/rabbitmq"
+	"repo-watch/internal/events"
 )
 
 func TestRenderEmail(t *testing.T) {
@@ -75,7 +75,7 @@ func TestRenderEmail(t *testing.T) {
 			data, err := json.Marshal(tt.data)
 			require.NoError(t, err)
 
-			email, err := renderEmail(rabbitmq.EventEmailQueuedPayload{
+			email, err := renderEmail(events.EventEmailQueuedPayload{
 				Recipient: "alice@example.com",
 				Type:      tt.emailType,
 				Data:      data,
@@ -88,7 +88,7 @@ func TestRenderEmail(t *testing.T) {
 }
 
 func TestRenderEmailRejectsInvalidData(t *testing.T) {
-	_, err := renderEmail(rabbitmq.EventEmailQueuedPayload{
+	_, err := renderEmail(events.EventEmailQueuedPayload{
 		Type: emails.EmailRepositoryRemoved,
 		Data: json.RawMessage(`"not-an-object"`),
 	}, "https://example.test")
@@ -96,7 +96,7 @@ func TestRenderEmailRejectsInvalidData(t *testing.T) {
 }
 
 func TestRenderEmailRejectsUnknownType(t *testing.T) {
-	_, err := renderEmail(rabbitmq.EventEmailQueuedPayload{
+	_, err := renderEmail(events.EventEmailQueuedPayload{
 		Type: "unknown-email-type",
 		Data: json.RawMessage(`{}`),
 	}, "https://example.test")

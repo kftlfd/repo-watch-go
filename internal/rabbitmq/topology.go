@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/rabbitmq/amqp091-go"
+
+	"repo-watch/internal/events"
 )
 
 const (
@@ -35,19 +37,19 @@ var inboxQueuesDef = []struct {
 }{
 	{
 		name:        QueueSubscriptionInbox,
-		bindingKeys: []string{EventRepositoryRemoved},
+		bindingKeys: []string{events.EventRepositoryRemoved},
 	},
 	{
 		name:        QueueScannerInbox,
-		bindingKeys: []string{EventRepositoryChanged},
+		bindingKeys: []string{events.EventRepositoryChanged},
 	},
 	{
 		name:        QueueNotificationInbox,
-		bindingKeys: []string{EventSubscriptionChanged, EventRepositoryRemoved, EventReleaseDetected},
+		bindingKeys: []string{events.EventSubscriptionChanged, events.EventRepositoryRemoved, events.EventReleaseDetected},
 	},
 	{
 		name:        QueueMailerInbox,
-		bindingKeys: []string{EventEmailQueued},
+		bindingKeys: []string{events.EventEmailQueued},
 	},
 }
 

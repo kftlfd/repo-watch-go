@@ -100,7 +100,7 @@ func (c *githubClient) httpGet(ctx context.Context, reqUrl string, respData any)
 	if err != nil {
 		return fmt.Errorf("github request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return classifyHTTPError(resp)

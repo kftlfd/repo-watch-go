@@ -10,6 +10,7 @@ import (
 
 	"github.com/rabbitmq/amqp091-go"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/utils"
 )
 
@@ -61,7 +62,7 @@ func NewConsumer(
 
 // if returning Ack: err must be nil
 // for Nack types: err must be non-nil
-type JSONEventHandler func(msg EnvelopeJSON) (AckType, error)
+type JSONEventHandler func(msg events.Envelope) (AckType, error)
 
 // ConsumeJSON consumes queueName and keeps consuming until the caller's
 // context is cancelled or the client stops.
@@ -162,14 +163,14 @@ func (c *consumer) consume(
 	return nil
 }
 
-var invalidAck = errors.New("invalid ack")
+var errInvalidAck = errors.New("invalid ack")
 
 // isFatalConsumeError reports whether err requires operator action. Server
 // errors other than the temporary ones, for example a missing queue or a
 // failed precondition, will not resolve by reconnecting, so the consumer
 // should surface them instead of retrying forever.
 func isFatalConsumeError(err error) bool {
-	if errors.Is(err, invalidAck) {
+	if errors.Is(err, errInvalidAck) {
 		return true
 	}
 
@@ -192,7 +193,7 @@ func (c *consumer) handleDelivery(
 		slog.Bool("redelivered", delivery.Redelivered),
 	}
 
-	var msg EnvelopeJSON
+	var msg events.Envelope
 	var ack AckType
 	var err error
 
@@ -225,7 +226,6 @@ func (c *consumer) handleDelivery(
 		logArgs = append(logArgs, slog.Any("error", err))
 	}
 
-	err = nil
 	level := slog.LevelDebug
 
 	switch ack {
@@ -242,7 +242,7 @@ func (c *consumer) handleDelivery(
 		c.metrics.Requeued(queueName)
 
 	default:
-		err = fmt.Errorf("%w: %q", invalidAck, ack)
+		err = fmt.Errorf("%w: %q", errInvalidAck, ack)
 		level = slog.LevelError
 		handlerStatus.invalidAck = true
 		handlerStatus.defects = true

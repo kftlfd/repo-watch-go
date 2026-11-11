@@ -8,6 +8,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 
+	"repo-watch/internal/events"
 	"repo-watch/internal/notification/db/dbGen"
 	"repo-watch/internal/rabbitmq"
 )
@@ -16,12 +17,12 @@ func TestHandlerDiscardsInvalidPayload(t *testing.T) {
 	w := &inboxWorker{}
 
 	for _, eventType := range []string{
-		rabbitmq.EventSubscriptionChanged,
-		rabbitmq.EventReleaseDetected,
-		rabbitmq.EventRepositoryRemoved,
+		events.EventSubscriptionChanged,
+		events.EventReleaseDetected,
+		events.EventRepositoryRemoved,
 	} {
 		t.Run(eventType, func(t *testing.T) {
-			ack, err := w.handler(rabbitmq.EnvelopeJSON{
+			ack, err := w.handler(events.Envelope{
 				EventType: eventType,
 				Payload:   json.RawMessage(`not-json`),
 			})
@@ -32,6 +33,32 @@ func TestHandlerDiscardsInvalidPayload(t *testing.T) {
 	}
 }
 
+func TestHandlerDiscardsUnsupportedVersion(t *testing.T) {
+	w := &inboxWorker{}
+
+	ack, err := w.handler(events.Envelope{
+		EventType: events.EventReleaseDetected,
+		Version:   events.VersionReleaseDetected + 1,
+		Payload:   json.RawMessage(`{}`),
+	})
+
+	require.Equal(t, rabbitmq.NackDiscard, ack)
+	require.ErrorContains(t, err, "unsupported version")
+}
+
+func TestHandlerDiscardsUnknownEventType(t *testing.T) {
+	w := &inboxWorker{}
+
+	ack, err := w.handler(events.Envelope{
+		EventType: "unknown.event",
+		Version:   1,
+		Payload:   json.RawMessage(`{}`),
+	})
+
+	require.Equal(t, rabbitmq.NackDiscard, ack)
+	require.ErrorContains(t, err, "unknown event type")
+}
+
 func TestHandlerRequeuesTransientDatabaseFailure(t *testing.T) {
 	db, err := sql.Open("postgres", "")
 	require.NoError(t, err)
@@ -39,8 +66,8 @@ func TestHandlerRequeuesTransientDatabaseFailure(t *testing.T) {
 
 	w := &inboxWorker{q: dbGen.New(db)}
 
-	ack, err := w.handler(rabbitmq.EnvelopeJSON{
-		EventType: rabbitmq.EventSubscriptionChanged,
+	ack, err := w.handler(events.Envelope{
+		EventType: events.EventSubscriptionChanged,
 		Payload: json.RawMessage(`{
 			"email": "alice@example.com",
 			"repository_id": "owner/repo",

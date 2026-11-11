@@ -37,7 +37,7 @@ func NewPostgresDB(t *testing.T, dbName string) *sql.DB {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		db.Close()
+		_ = db.Close()
 	})
 
 	return db

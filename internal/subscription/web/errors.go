@@ -26,9 +26,14 @@ func subscribeErrorMessage(err error) (int, string) {
 }
 
 func tokenErrorMessage(err error) (int, string) {
-	if errors.Is(err, sql.ErrNoRows) {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
 		return http.StatusNotFound, msgTokenUsed
+	case errors.Is(err, subs.ErrSubscriptionAlreadyActive):
+		return http.StatusConflict, msgAlreadyConfirmed
+	case errors.Is(err, subs.ErrSubscriptionAlreadyInactive):
+		return http.StatusConflict, msgAlreadyUnsubscribed
+	default:
+		return http.StatusInternalServerError, msgInternal
 	}
-
-	return http.StatusInternalServerError, msgInternal
 }

@@ -10,40 +10,29 @@ import (
 	"time"
 )
 
-const createToken = `-- name: CreateToken :one
-INSERT INTO tokens
-    (subscription_id, token_type, token_val)
-VALUES
-    ($1, $2, $3)
-RETURNING id, subscription_id, token_type, token_val, created_at
+const deleteTokensBySubscription = `-- name: DeleteTokensBySubscription :exec
+DELETE FROM tokens
+WHERE subscription_id = $1
 `
 
-type CreateTokenParams struct {
+func (q *Queries) DeleteTokensBySubscription(ctx context.Context, subscriptionID int32) error {
+	_, err := q.db.ExecContext(ctx, deleteTokensBySubscription, subscriptionID)
+	return err
+}
+
+const deleteTokensBySubscriptionAndType = `-- name: DeleteTokensBySubscriptionAndType :exec
+DELETE FROM tokens
+WHERE subscription_id = $1
+    AND token_type = $2
+`
+
+type DeleteTokensBySubscriptionAndTypeParams struct {
 	SubscriptionID int32
 	TokenType      string
-	TokenVal       string
 }
 
-func (q *Queries) CreateToken(ctx context.Context, arg CreateTokenParams) (Token, error) {
-	row := q.db.QueryRowContext(ctx, createToken, arg.SubscriptionID, arg.TokenType, arg.TokenVal)
-	var i Token
-	err := row.Scan(
-		&i.ID,
-		&i.SubscriptionID,
-		&i.TokenType,
-		&i.TokenVal,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const deleteTokenById = `-- name: DeleteTokenById :exec
-DELETE FROM tokens
-WHERE id = $1
-`
-
-func (q *Queries) DeleteTokenById(ctx context.Context, id int32) error {
-	_, err := q.db.ExecContext(ctx, deleteTokenById, id)
+func (q *Queries) DeleteTokensBySubscriptionAndType(ctx context.Context, arg DeleteTokensBySubscriptionAndTypeParams) error {
+	_, err := q.db.ExecContext(ctx, deleteTokensBySubscriptionAndType, arg.SubscriptionID, arg.TokenType)
 	return err
 }
 
@@ -113,6 +102,37 @@ type GetTokenParams struct {
 
 func (q *Queries) GetToken(ctx context.Context, arg GetTokenParams) (Token, error) {
 	row := q.db.QueryRowContext(ctx, getToken, arg.SubscriptionID, arg.TokenType)
+	var i Token
+	err := row.Scan(
+		&i.ID,
+		&i.SubscriptionID,
+		&i.TokenType,
+		&i.TokenVal,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const upsertToken = `-- name: UpsertToken :one
+INSERT INTO tokens
+    (subscription_id, token_type, token_val)
+VALUES
+    ($1, $2, $3)
+ON CONFLICT (subscription_id, token_type) DO UPDATE
+SET
+    token_val = EXCLUDED.token_val,
+    created_at = now()
+RETURNING id, subscription_id, token_type, token_val, created_at
+`
+
+type UpsertTokenParams struct {
+	SubscriptionID int32
+	TokenType      string
+	TokenVal       string
+}
+
+func (q *Queries) UpsertToken(ctx context.Context, arg UpsertTokenParams) (Token, error) {
+	row := q.db.QueryRowContext(ctx, upsertToken, arg.SubscriptionID, arg.TokenType, arg.TokenVal)
 	var i Token
 	err := row.Scan(
 		&i.ID,

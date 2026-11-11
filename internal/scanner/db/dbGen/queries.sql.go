@@ -57,23 +57,25 @@ func (q *Queries) CreateOrUpdateRepo(ctx context.Context, arg CreateOrUpdateRepo
 
 const createOutboxRow = `-- name: CreateOutboxRow :one
 INSERT INTO
-    outbox (event_type, payload)
+    outbox (event_type, event_version, payload)
 VALUES
-    ($1, $2)
-RETURNING id, event_type, payload, created_at, leased_until, published_at, attempts, last_error, failed_at
+    ($1, $2, $3)
+RETURNING id, event_type, event_version, payload, created_at, leased_until, published_at, attempts, last_error, failed_at
 `
 
 type CreateOutboxRowParams struct {
-	EventType string
-	Payload   json.RawMessage
+	EventType    string
+	EventVersion int32
+	Payload      json.RawMessage
 }
 
 func (q *Queries) CreateOutboxRow(ctx context.Context, arg CreateOutboxRowParams) (Outbox, error) {
-	row := q.db.QueryRowContext(ctx, createOutboxRow, arg.EventType, arg.Payload)
+	row := q.db.QueryRowContext(ctx, createOutboxRow, arg.EventType, arg.EventVersion, arg.Payload)
 	var i Outbox
 	err := row.Scan(
 		&i.ID,
 		&i.EventType,
+		&i.EventVersion,
 		&i.Payload,
 		&i.CreatedAt,
 		&i.LeasedUntil,
@@ -85,12 +87,12 @@ func (q *Queries) CreateOutboxRow(ctx context.Context, arg CreateOutboxRowParams
 	return i, err
 }
 
-const createRelease = `-- name: CreateRelease :one
+const createRelease = `-- name: CreateRelease :execrows
 INSERT INTO releases
     (repository_id, tag)
 VALUES
     ($1, $2)
-RETURNING id, repository_id, tag, created_at
+ON CONFLICT (repository_id, tag) DO NOTHING
 `
 
 type CreateReleaseParams struct {
@@ -98,16 +100,12 @@ type CreateReleaseParams struct {
 	Tag          string
 }
 
-func (q *Queries) CreateRelease(ctx context.Context, arg CreateReleaseParams) (Release, error) {
-	row := q.db.QueryRowContext(ctx, createRelease, arg.RepositoryID, arg.Tag)
-	var i Release
-	err := row.Scan(
-		&i.ID,
-		&i.RepositoryID,
-		&i.Tag,
-		&i.CreatedAt,
-	)
-	return i, err
+func (q *Queries) CreateRelease(ctx context.Context, arg CreateReleaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createRelease, arg.RepositoryID, arg.Tag)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getEventTypeCount = `-- name: GetEventTypeCount :one
@@ -138,7 +136,7 @@ UPDATE outbox
 SET leased_until = $2
 FROM candidates
 WHERE outbox.id = candidates.id
-RETURNING outbox.id, outbox.event_type, outbox.payload, outbox.created_at, outbox.leased_until, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
+RETURNING outbox.id, outbox.event_type, outbox.event_version, outbox.payload, outbox.created_at, outbox.leased_until, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
 `
 
 type GetOutboxBatchParams struct {
@@ -158,6 +156,7 @@ func (q *Queries) GetOutboxBatch(ctx context.Context, arg GetOutboxBatchParams) 
 		if err := rows.Scan(
 			&i.ID,
 			&i.EventType,
+			&i.EventVersion,
 			&i.Payload,
 			&i.CreatedAt,
 			&i.LeasedUntil,
@@ -248,18 +247,27 @@ func (q *Queries) MarkOutboxPublished(ctx context.Context, ids []int32) error {
 	return err
 }
 
-const markRepoInactive = `-- name: MarkRepoInactive :exec
+const markRepoInactive = `-- name: MarkRepoInactive :execrows
 UPDATE repositories
 SET
     active = false,
-    active_version = 0,
     updated_at = now()
 WHERE id = $1
+    AND active = true
+    AND active_version = $2
 `
 
-func (q *Queries) MarkRepoInactive(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, markRepoInactive, id)
-	return err
+type MarkRepoInactiveParams struct {
+	ID            string
+	ActiveVersion int32
+}
+
+func (q *Queries) MarkRepoInactive(ctx context.Context, arg MarkRepoInactiveParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markRepoInactive, arg.ID, arg.ActiveVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const markRepoProcessed = `-- name: MarkRepoProcessed :exec
