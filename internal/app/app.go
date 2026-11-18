@@ -15,7 +15,10 @@ import (
 
 const shutdownTimeout = 10 * time.Second
 
-var errSignal = errors.New("termination signal")
+var (
+	errSignal        = errors.New("termination signal")
+	errGroupFinished = errors.New("group finished")
+)
 
 func Run(
 	logger *slog.Logger,
@@ -28,24 +31,25 @@ func Run(
 	defer signalStop()
 
 	go func() {
-		defer signalStop()
 		select {
 		case <-ctx.Done():
 		case <-signalCtx.Done():
 			cancel(errSignal)
 		}
+		signalStop()
 	}()
 
 	g := newGroup(ctx, cancel, logger)
 	done := make(chan struct{})
 
 	go func() {
-		defer close(done)
-		defer g.wait()
 		logger.Info("starting up")
 		if err := launch(g, logger); err != nil {
 			cancel(err)
 		}
+		g.wait()
+		cancel(errGroupFinished)
+		close(done)
 	}()
 
 	<-ctx.Done()
@@ -58,7 +62,7 @@ func Run(
 		os.Exit(1)
 
 	case <-done:
-		if !errors.Is(cause, errSignal) {
+		if !errors.Is(cause, errSignal) && !errors.Is(cause, errGroupFinished) {
 			logger.Error("exited with error", "error", cause)
 			os.Exit(1)
 		}
