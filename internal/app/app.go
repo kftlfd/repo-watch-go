@@ -41,11 +41,13 @@ func Run(
 
 	g := newGroup(ctx, cancel, logger)
 	done := make(chan struct{})
+	var launchErr error
 
 	go func() {
 		logger.Info("starting up")
-		if err := launch(g, logger); err != nil {
-			cancel(err)
+		launchErr = launch(g, logger)
+		if launchErr != nil {
+			cancel(launchErr)
 		}
 		g.wait()
 		cancel(errGroupFinished)
@@ -62,6 +64,10 @@ func Run(
 		os.Exit(1)
 
 	case <-done:
+		if launchErr != nil {
+			logger.Error("exited with error", "error", launchErr)
+			os.Exit(1)
+		}
 		if !errors.Is(cause, errSignal) && !errors.Is(cause, errGroupFinished) {
 			logger.Error("exited with error", "error", cause)
 			os.Exit(1)
