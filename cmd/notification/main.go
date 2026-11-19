@@ -50,7 +50,7 @@ func (cfg *Config) runMigrate(g *app.Group, logger *slog.Logger) error {
 	}
 
 	ctx, cancel := context.WithTimeout(g.Ctx(), migrateTimeout)
-	db, err := postgres.Connect(ctx, cfg.Db.URL, cfg.Db.AutoCreate, true, migrations.MigrationsFS)
+	db, err := postgres.Connect(ctx, cfg.Db, cfg.Db.AutoCreate, true, migrations.MigrationsFS)
 	cancel()
 	if err != nil {
 		return err
@@ -76,7 +76,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	logger.Info("preparing DB")
 
 	ctx, cancel := context.WithTimeout(g.Ctx(), migrateTimeout)
-	db, err := postgres.Connect(ctx, cfg.Db.URL, cfg.Db.AutoCreate, cfg.Db.AutoMigrate, migrations.MigrationsFS)
+	db, err := postgres.Connect(ctx, cfg.Db, cfg.Db.AutoCreate, cfg.Db.AutoMigrate, migrations.MigrationsFS)
 	cancel()
 	if err != nil {
 		return err

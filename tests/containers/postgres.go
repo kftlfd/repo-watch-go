@@ -38,7 +38,7 @@ func NewPostgres(t *testing.T, dbName string) *Postgres {
 	dsn, err := container.ConnectionString(t.Context(), "sslmode=disable")
 	require.NoError(t, err)
 
-	db, err := postgres.Connect(t.Context(), dsn, false, false, nil)
+	db, err := postgres.Connect(t.Context(), postgres.Config{URL: dsn}, false, false, nil)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {

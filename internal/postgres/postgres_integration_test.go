@@ -41,7 +41,7 @@ func TestEnsureDbExistsConcurrent(t *testing.T) {
 	target.Path = "/" + dbName
 	target.RawPath = ""
 
-	db, err := postgres.Connect(ctx, target.String(), false, false, nil)
+	db, err := postgres.Connect(ctx, postgres.Config{URL: target.String()}, false, false, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 

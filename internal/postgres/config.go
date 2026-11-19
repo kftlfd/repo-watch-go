@@ -26,12 +26,18 @@ type Config struct {
 	Database string
 	SSLMode  string
 
+	Pool PoolConfig
+
 	AutoCreate  bool
 	AutoMigrate bool
 }
 
 // Resolve validates the configuration and returns a complete database URL.
 func (c Config) Resolve() (string, error) {
+	if err := c.Pool.Validate(); err != nil {
+		return "", fmt.Errorf("invalid DB pool config: %w", err)
+	}
+
 	u, err := parseURL(c.URL)
 	if err != nil {
 		return "", err
