@@ -55,6 +55,19 @@ func (q *Queries) DeleteOrphanedUnsubTokens(ctx context.Context, cutoff time.Tim
 	return result.RowsAffected()
 }
 
+const deleteProcessedEvents = `-- name: DeleteProcessedEvents :execrows
+DELETE FROM processed_events
+WHERE processed_at < $1::timestamptz
+`
+
+func (q *Queries) DeleteProcessedEvents(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteProcessedEvents, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deletePublishedOutbox = `-- name: DeletePublishedOutbox :execrows
 DELETE FROM outbox
 WHERE published_at IS NOT NULL

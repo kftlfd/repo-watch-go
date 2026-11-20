@@ -43,6 +43,14 @@ CREATE INDEX tokens_unsub_created_at_idx ON tokens (created_at)
 WHERE
     token_type = 'unsub';
 
+CREATE TABLE processed_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX processed_events_processed_at_idx ON processed_events (processed_at);
+
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -83,6 +91,10 @@ DROP INDEX IF EXISTS outbox_retryable_idx;
 DROP INDEX IF EXISTS outbox_unpublished_idx;
 
 DROP TABLE IF EXISTS outbox;
+
+DROP INDEX IF EXISTS processed_events_processed_at_idx;
+
+DROP TABLE IF EXISTS processed_events;
 
 DROP INDEX IF EXISTS tokens_unsub_created_at_idx;
 

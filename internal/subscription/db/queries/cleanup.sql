@@ -20,3 +20,7 @@ WHERE published_at IS NOT NULL
 DELETE FROM outbox
 WHERE failed_at IS NOT NULL
     AND failed_at < @cutoff::timestamptz;
+
+-- name: DeleteProcessedEvents :execrows
+DELETE FROM processed_events
+WHERE processed_at < @cutoff::timestamptz;

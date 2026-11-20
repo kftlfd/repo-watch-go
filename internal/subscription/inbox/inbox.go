@@ -67,6 +67,20 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 		defer func() { _ = tx.Rollback() }()
 
 		qtx := w.q.WithTx(tx)
+		claimed, err := qtx.ClaimProcessedEvent(ctx, dbGen.ClaimProcessedEventParams{
+			EventID:   msg.EventID,
+			EventType: msg.EventType,
+		})
+		if err != nil {
+			return rabbitmq.NackRequeue, fmt.Errorf("claim event: %w", err)
+		}
+		if claimed == 0 {
+			if err := tx.Commit(); err != nil {
+				return rabbitmq.NackRequeue, fmt.Errorf("commit tx: %w", err)
+			}
+			return rabbitmq.Ack, nil
+		}
+
 		if err := qtx.MarkRepositoryRemoved(ctx, ev.RepositoryID); err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("update repo: %w", err)
 		}
