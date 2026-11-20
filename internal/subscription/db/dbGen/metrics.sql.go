@@ -7,8 +7,31 @@ package dbGen
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
+
+const getOutboxFailedStats = `-- name: GetOutboxFailedStats :one
+SELECT
+    count(*) OVER () AS failed,
+    failed_at AS oldest_failed_at
+FROM outbox
+WHERE failed_at IS NOT NULL
+ORDER BY failed_at ASC
+LIMIT 1
+`
+
+type GetOutboxFailedStatsRow struct {
+	Failed         int64
+	OldestFailedAt sql.NullTime
+}
+
+func (q *Queries) GetOutboxFailedStats(ctx context.Context) (GetOutboxFailedStatsRow, error) {
+	row := q.db.QueryRowContext(ctx, getOutboxFailedStats)
+	var i GetOutboxFailedStatsRow
+	err := row.Scan(&i.Failed, &i.OldestFailedAt)
+	return i, err
+}
 
 const getOutboxPendingStats = `-- name: GetOutboxPendingStats :one
 SELECT

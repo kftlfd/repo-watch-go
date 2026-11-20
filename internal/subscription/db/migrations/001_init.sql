@@ -22,6 +22,10 @@ CREATE TABLE subscriptions (
     UNIQUE (email, repository_id)
 );
 
+CREATE INDEX subscriptions_active_repository_idx ON subscriptions (repository_id)
+WHERE
+    active = true;
+
 CREATE TABLE tokens (
     id SERIAL PRIMARY KEY,
     subscription_id INTEGER NOT NULL REFERENCES subscriptions (id),
@@ -34,6 +38,10 @@ CREATE TABLE tokens (
 CREATE INDEX tokens_confirm_created_at_idx ON tokens (created_at)
 WHERE
     token_type = 'confirm';
+
+CREATE INDEX tokens_unsub_created_at_idx ON tokens (created_at)
+WHERE
+    token_type = 'unsub';
 
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
@@ -61,7 +69,13 @@ CREATE INDEX outbox_published_at_idx ON outbox (published_at)
 WHERE
     published_at IS NOT NULL;
 
+CREATE INDEX outbox_failed_at_idx ON outbox (failed_at)
+WHERE
+    failed_at IS NOT NULL;
+
 -- +goose Down
+DROP INDEX IF EXISTS outbox_failed_at_idx;
+
 DROP INDEX IF EXISTS outbox_published_at_idx;
 
 DROP INDEX IF EXISTS outbox_retryable_idx;
@@ -70,9 +84,13 @@ DROP INDEX IF EXISTS outbox_unpublished_idx;
 
 DROP TABLE IF EXISTS outbox;
 
+DROP INDEX IF EXISTS tokens_unsub_created_at_idx;
+
 DROP INDEX IF EXISTS tokens_confirm_created_at_idx;
 
 DROP TABLE IF EXISTS tokens;
+
+DROP INDEX IF EXISTS subscriptions_active_repository_idx;
 
 DROP TABLE IF EXISTS subscriptions;
 

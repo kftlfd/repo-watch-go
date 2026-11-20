@@ -13,13 +13,18 @@ import (
 
 const postgresImage = "postgres:16-alpine"
 
-func NewPostgresDB(t *testing.T, dbName string) *sql.DB {
+type Postgres struct {
+	DB  *sql.DB
+	DSN string
+}
+
+func NewPostgres(t *testing.T, dbName string) *Postgres {
 	t.Helper()
 
 	container, err := pg.Run(
 		t.Context(),
 		postgresImage,
-		pg.WithDatabase("subscription_test"),
+		pg.WithDatabase(dbName),
 		pg.WithUsername("postgres"),
 		pg.WithPassword("postgres"),
 		pg.BasicWaitStrategies(),
@@ -33,12 +38,20 @@ func NewPostgresDB(t *testing.T, dbName string) *sql.DB {
 	dsn, err := container.ConnectionString(t.Context(), "sslmode=disable")
 	require.NoError(t, err)
 
-	db, err := postgres.Connect(dsn)
+	db, err := postgres.Connect(t.Context(), postgres.Config{URL: dsn}, false, false, nil)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
 		_ = db.Close()
 	})
 
-	return db
+	return &Postgres{
+		DB:  db,
+		DSN: dsn,
+	}
+}
+
+func NewPostgresDB(t *testing.T, dbName string) *sql.DB {
+	t.Helper()
+	return NewPostgres(t, dbName).DB
 }

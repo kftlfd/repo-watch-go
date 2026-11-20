@@ -16,9 +16,7 @@ type Config struct {
 	PortAPI     string
 	PortAdmin   string
 	APIHost     string
-	DbBaseUrl   string
-	DbUrl       string
-	DbName      string
+	Db          postgres.Config
 	RabbitMQUrl string
 	GhApiUrl    string
 	GithubToken string
@@ -33,8 +31,14 @@ func loadConfig() *Config {
 		PortAdmin: utils.Env("PORT_ADMIN", "4000"),
 		APIHost:   utils.Env("API_HOST", "localhost:3000"),
 
-		DbBaseUrl: os.Getenv("POSTGRES_URL"),
-		DbName:    utils.Env("DB_NAME", "subscription_db"),
+		Db: postgres.Config{
+			URL:      os.Getenv("DB_URL"),
+			Database: utils.Env("DB_NAME", "subscription_db"),
+			SSLMode:  os.Getenv("DB_SSL_MODE"),
+
+			AutoCreate:  utils.EnvBool("DB_AUTO_CREATE", false),
+			AutoMigrate: utils.EnvBool("DB_AUTO_MIGRATE", false),
+		},
 
 		RabbitMQUrl: os.Getenv("RABBITMQ_URL"),
 
@@ -44,14 +48,24 @@ func loadConfig() *Config {
 }
 
 func (cfg *Config) validateConfig() error {
-	if cfg.DbBaseUrl == "" {
-		return fmt.Errorf("no POSTGRES_URL")
+	if err := cfg.validateDbConfig(); err != nil {
+		return err
 	}
-	cfg.DbUrl = postgres.CreateDbUrl(cfg.DbBaseUrl, cfg.DbName)
 
 	if cfg.RabbitMQUrl == "" {
 		return fmt.Errorf("no RABBITMQ_URL")
 	}
+
+	return nil
+}
+
+func (cfg *Config) validateDbConfig() error {
+	url, err := cfg.Db.Resolve()
+	if err != nil {
+		return fmt.Errorf("validate DB config: %w", err)
+	}
+
+	cfg.Db.URL = url
 
 	return nil
 }

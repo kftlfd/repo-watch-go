@@ -24,6 +24,37 @@ func (q *Queries) DeleteExpiredConfirmTokens(ctx context.Context, cutoff time.Ti
 	return result.RowsAffected()
 }
 
+const deleteFailedOutbox = `-- name: DeleteFailedOutbox :execrows
+DELETE FROM outbox
+WHERE failed_at IS NOT NULL
+    AND failed_at < $1::timestamptz
+`
+
+func (q *Queries) DeleteFailedOutbox(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteFailedOutbox, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteOrphanedUnsubTokens = `-- name: DeleteOrphanedUnsubTokens :execrows
+DELETE FROM tokens AS t
+USING subscriptions AS s
+WHERE t.subscription_id = s.id
+    AND t.token_type = 'unsub'
+    AND t.created_at < $1::timestamptz
+    AND s.active = false
+`
+
+func (q *Queries) DeleteOrphanedUnsubTokens(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteOrphanedUnsubTokens, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deletePublishedOutbox = `-- name: DeletePublishedOutbox :execrows
 DELETE FROM outbox
 WHERE published_at IS NOT NULL

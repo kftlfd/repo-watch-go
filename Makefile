@@ -15,6 +15,8 @@ GOLANGCILINT := GO_MOD_CACHE="$$(go env GOMODCACHE)"; \
 
 # =================
 
+check: format-check build vet lint test
+
 dev-infra-up:
 	docker compose up -d postgres rabbitmq
 
@@ -22,24 +24,22 @@ dev-infra-down:
 	docker compose down
 
 db-gen:
-	$(SQLC) generate
-	$(SQLC) vet
+	${SQLC} generate
+	${SQLC} vet
 
 swagger:
-	$(SWAG) init \
+	${SWAG} init \
 		--dir ./internal/subscription/api \
 		--generalInfo swagger.go \
 		--output ./internal/subscription/api/docs \
 		--outputTypes go
 
-check: format-check build vet lint test
-
 format-check:
-	$(GOIMPORTS) -local repo-watch -d .
+	${GOIMPORTS} -local repo-watch -d .
 	gofmt -d .
 
 format:
-	$(GOIMPORTS) -local repo-watch -w .
+	${GOIMPORTS} -local repo-watch -w .
 
 build:
 	go build ./...
@@ -48,7 +48,7 @@ vet:
 	go vet ./...
 
 lint:
-	${GOLANGCILINT} run
+	${GOLANGCILINT} run ./...
 
 test:
 	go test ./...

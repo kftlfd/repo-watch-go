@@ -108,3 +108,20 @@ func (s *subscriptionOutbox) PendingStats(ctx context.Context) (dispatcher.Pendi
 
 	return dispatcher.PendingStats{Count: row.Pending, Oldest: row.OldestCreatedAt}, nil
 }
+
+func (s *subscriptionOutbox) FailedStats(ctx context.Context) (dispatcher.FailedStats, error) {
+	row, err := s.q.GetOutboxFailedStats(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return dispatcher.FailedStats{}, nil
+		}
+		return dispatcher.FailedStats{}, err
+	}
+
+	var oldest time.Time
+	if row.OldestFailedAt.Valid {
+		oldest = row.OldestFailedAt.Time
+	}
+
+	return dispatcher.FailedStats{Count: row.Failed, Oldest: oldest}, nil
+}

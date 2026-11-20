@@ -52,6 +52,13 @@ type PendingStats struct {
 	Oldest time.Time
 }
 
+// FailedStats describes terminal outbox rows that were abandoned. Oldest is
+// zero when there are no failed rows.
+type FailedStats struct {
+	Count  int64
+	Oldest time.Time
+}
+
 type Store interface {
 	GetNextBatch(ctx context.Context, batchSize int32, leaseUntil time.Time) ([]Row, error)
 	MarkPublished(ctx context.Context, ids []int32) error
@@ -63,6 +70,7 @@ type Store interface {
 		maxAttempts int32,
 	) (Failure, error)
 	PendingStats(ctx context.Context) (PendingStats, error)
+	FailedStats(ctx context.Context) (FailedStats, error)
 }
 
 type DispatcherConfig struct {
@@ -243,7 +251,7 @@ func (d *Dispatcher) runIteration(ctx context.Context) (processed int, err error
 	ctx, cancel := context.WithTimeout(ctx, d.cfg.loopIterationTimeout)
 	defer cancel()
 
-	d.recordPendingStats(ctx)
+	d.recordStats(ctx)
 
 	leaseDeadline := d.now().Add(d.cfg.leaseDuration)
 	batch, err := d.store.GetNextBatch(ctx, d.cfg.batchSize, leaseDeadline)
@@ -304,24 +312,37 @@ func (d *Dispatcher) runIteration(ctx context.Context) (processed int, err error
 	return processed, errors.Join(errs...)
 }
 
-func (d *Dispatcher) recordPendingStats(ctx context.Context) {
+func (d *Dispatcher) recordStats(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
 
-	stats, err := d.store.PendingStats(ctx)
+	pending, err := d.store.PendingStats(ctx)
 	if err != nil {
-		d.logger.Warn("outbox stats query failed", "error", err)
+		d.logger.Warn("outbox pending stats query failed", "error", err)
+	} else {
+		d.metrics.SetPending(pending.Count)
+
+		var pendingAge time.Duration
+		if pending.Count > 0 && !pending.Oldest.IsZero() {
+			pendingAge = max(d.now().Sub(pending.Oldest), 0)
+		}
+		d.metrics.SetOldestAge(pendingAge)
+	}
+
+	failed, err := d.store.FailedStats(ctx)
+	if err != nil {
+		d.logger.Warn("outbox failed stats query failed", "error", err)
 		return
 	}
 
-	d.metrics.SetPending(stats.Count)
+	d.metrics.SetFailed(failed.Count)
 
-	var age time.Duration
-	if stats.Count > 0 && !stats.Oldest.IsZero() {
-		age = max(d.now().Sub(stats.Oldest), 0)
+	var failedAge time.Duration
+	if failed.Count > 0 && !failed.Oldest.IsZero() {
+		failedAge = max(d.now().Sub(failed.Oldest), 0)
 	}
-	d.metrics.SetOldestAge(age)
+	d.metrics.SetOldestFailedAge(failedAge)
 }
 
 func (d *Dispatcher) publishWithRetry(

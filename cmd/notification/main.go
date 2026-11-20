@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,6 +27,8 @@ import (
 	"repo-watch/internal/taskrunner"
 )
 
+const migrateTimeout = 5 * time.Minute
+
 func main() {
 	_ = godotenv.Load()
 
@@ -32,7 +36,29 @@ func main() {
 
 	logger := logger.NewLogger(cfg.LogLevel, "service", "notification")
 
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		app.Run(logger, cfg.runMigrate)
+		return
+	}
+
 	app.Run(logger, cfg.run)
+}
+
+func (cfg *Config) runMigrate(g *app.Group, logger *slog.Logger) error {
+	if err := cfg.validateDbConfig(); err != nil {
+		return fmt.Errorf("validate config: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(g.Ctx(), migrateTimeout)
+	db, err := postgres.Connect(ctx, cfg.Db, cfg.Db.AutoCreate, true, migrations.MigrationsFS)
+	cancel()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	logger.Info("migrations applied")
+	return nil
 }
 
 func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
@@ -49,20 +75,13 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 
 	logger.Info("preparing DB")
 
-	if err := postgres.EnsureDbExists(g.Ctx(), cfg.DbBaseUrl, cfg.DbName); err != nil {
-		return fmt.Errorf("ensure DB exists: %w", err)
-	}
-	db, err := postgres.Connect(cfg.DbUrl)
+	ctx, cancel := context.WithTimeout(g.Ctx(), migrateTimeout)
+	db, err := postgres.Connect(ctx, cfg.Db, cfg.Db.AutoCreate, cfg.Db.AutoMigrate, migrations.MigrationsFS)
+	cancel()
 	if err != nil {
-		return fmt.Errorf("DB connect: %w", err)
+		return err
 	}
 	g.Cleanup(func() { _ = db.Close() })
-	if err = db.PingContext(g.Ctx()); err != nil {
-		return fmt.Errorf("DB ping: %w", err)
-	}
-	if err := postgres.Migrate(g.Ctx(), db, migrations.MigrationsFS); err != nil {
-		return fmt.Errorf("DB migrate: %w", err)
-	}
 
 	logger.Info("preparing rabbitmq")
 
