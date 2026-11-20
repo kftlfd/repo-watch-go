@@ -15,7 +15,12 @@ import (
 )
 
 type RabbitJSONConsumer interface {
-	ConsumeJSON(ctx context.Context, queueName string, handler JSONEventHandler) error
+	ConsumeJSON(
+		ctx context.Context,
+		queueName string,
+		handler JSONEventHandler,
+		cfg *ConsumerSessionConfig,
+	) error
 }
 
 var _ RabbitJSONConsumer = (*consumer)(nil)
@@ -30,6 +35,7 @@ const (
 	consumerRetryBase       = 5 * time.Second
 	consumerRetryMax        = 120 * time.Second
 	consumerStableThreshold = 10 * time.Second
+	defaultHandlerTimeout   = time.Minute
 )
 
 type consumer struct {
@@ -62,7 +68,7 @@ func NewConsumer(
 
 // if returning Ack: err must be nil
 // for Nack types: err must be non-nil
-type JSONEventHandler func(msg events.Envelope) (AckType, error)
+type JSONEventHandler func(ctx context.Context, msg events.Envelope) (AckType, error)
 
 // ConsumeJSON consumes queueName and keeps consuming until the caller's
 // context is cancelled or the client stops.
@@ -70,12 +76,47 @@ func (c *consumer) ConsumeJSON(
 	ctx context.Context,
 	queueName string,
 	handler JSONEventHandler,
+	cfg *ConsumerSessionConfig,
 ) error {
+	session := &consumerSession{
+		client:    c.client,
+		logger:    c.logger,
+		metrics:   c.metrics,
+		ctx:       ctx,
+		queueName: queueName,
+		handler:   handler,
+	}
+	if cfg != nil {
+		session.cfg = *cfg
+	}
+	if session.cfg.HandlerTimeout <= 0 {
+		session.cfg.HandlerTimeout = defaultHandlerTimeout
+	}
+
+	return session.run()
+}
+
+// ConsumerSessionConfig configures a single ConsumeJSON run.
+type ConsumerSessionConfig struct {
+	HandlerTimeout time.Duration
+}
+
+type consumerSession struct {
+	cfg       ConsumerSessionConfig
+	client    Client
+	logger    *slog.Logger
+	metrics   MetricsRecorder
+	ctx       context.Context
+	queueName string
+	handler   JSONEventHandler
+}
+
+func (s *consumerSession) run() error {
 	backoff := consumerRetryBase
 
 	for {
-		conn, err := c.client.waitConn(ctx)
-		if ctx.Err() != nil {
+		conn, err := s.client.waitConn(s.ctx)
+		if s.ctx.Err() != nil {
 			return nil
 		}
 		if err != nil {
@@ -83,14 +124,14 @@ func (c *consumer) ConsumeJSON(
 		}
 
 		startedAt := time.Now()
-		err = c.consume(ctx, conn, queueName, handler)
-		if ctx.Err() != nil {
+		err = s.consume(conn)
+		if s.ctx.Err() != nil {
 			return nil
 		}
 
 		if err != nil && isFatalConsumeError(err) {
-			c.logger.Error("consumer stopped with fatal error",
-				"queue", queueName,
+			s.logger.Error("consumer stopped with fatal error",
+				"queue", s.queueName,
 				"error", err,
 			)
 			return err
@@ -102,29 +143,24 @@ func (c *consumer) ConsumeJSON(
 		}
 
 		if err == nil {
-			c.logger.Warn("consumer delivery channel closed; restarting", "queue", queueName)
+			s.logger.Warn("consumer delivery channel closed; restarting", "queue", s.queueName)
 			backoff = consumerRetryBase
 		} else {
-			c.logger.Warn("consumer stopped; restarting",
-				"queue", queueName,
+			s.logger.Warn("consumer stopped; restarting",
+				"queue", s.queueName,
 				"error", err,
 				"retry_in", backoff,
 			)
 		}
 
-		if err := utils.SleepCtx(ctx, backoff); err != nil {
+		if err := utils.SleepCtx(s.ctx, backoff); err != nil {
 			return nil
 		}
 		backoff = min(backoff*2, consumerRetryMax)
 	}
 }
 
-func (c *consumer) consume(
-	ctx context.Context,
-	conn *amqp091.Connection,
-	queueName string,
-	handler JSONEventHandler,
-) error {
+func (s *consumerSession) consume(conn *amqp091.Connection) error {
 	ch, err := conn.Channel()
 	if err != nil {
 		return fmt.Errorf("create consumer channel: %w", err)
@@ -140,8 +176,8 @@ func (c *consumer) consume(
 	}
 
 	deliveries, err := ch.ConsumeWithContext(
-		ctx,
-		queueName,
+		s.ctx,
+		s.queueName,
 		"",
 		false, // auto-ack
 		false, // exclusive
@@ -150,11 +186,11 @@ func (c *consumer) consume(
 		nil,
 	)
 	if err != nil {
-		return fmt.Errorf("consume queue %q: %w", queueName, err)
+		return fmt.Errorf("consume queue %q: %w", s.queueName, err)
 	}
 
 	for delivery := range deliveries {
-		err = c.handleDelivery(&delivery, queueName, handler)
+		err = s.handleDelivery(&delivery)
 		if err != nil {
 			return fmt.Errorf("handle delivery: %w", err)
 		}
@@ -181,13 +217,9 @@ func isFatalConsumeError(err error) bool {
 	return false
 }
 
-func (c *consumer) handleDelivery(
-	delivery *amqp091.Delivery,
-	queueName string,
-	handler JSONEventHandler,
-) error {
+func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 	logArgs := []any{
-		slog.String("queue", queueName),
+		slog.String("queue", s.queueName),
 		slog.String("routing_key", delivery.RoutingKey),
 		slog.String("message_id", delivery.MessageId),
 		slog.Bool("redelivered", delivery.Redelivered),
@@ -208,7 +240,9 @@ func (c *consumer) handleDelivery(
 		ack = NackDiscard
 		err = fmt.Errorf("invalid json envelope: %w", err)
 	} else {
-		ack, err = handler(msg)
+		handlerCtx, cancel := context.WithTimeout(s.ctx, s.cfg.HandlerTimeout)
+		ack, err = s.handler(handlerCtx, msg)
+		cancel()
 
 		if ack == Ack && err != nil {
 			ack = NackRequeue
@@ -239,7 +273,7 @@ func (c *consumer) handleDelivery(
 	case NackRequeue:
 		err = delivery.Nack(false, true)
 		level = slog.LevelWarn
-		c.metrics.Requeued(queueName)
+		s.metrics.Requeued(s.queueName)
 
 	default:
 		err = fmt.Errorf("%w: %q", errInvalidAck, ack)
@@ -249,17 +283,17 @@ func (c *consumer) handleDelivery(
 	}
 
 	if !handlerStatus.invalidAck {
-		c.metrics.MessageHandled(queueName, ack)
+		s.metrics.MessageHandled(s.queueName, ack)
 	}
 	if handlerStatus.failed || handlerStatus.invalidAck {
-		c.metrics.HandlerFailed(queueName)
+		s.metrics.HandlerFailed(s.queueName)
 	}
 	if handlerStatus.defects {
-		c.metrics.HandlerDefectDetected(queueName)
+		s.metrics.HandlerDefectDetected(s.queueName)
 	}
 
 	logArgs = append(logArgs, slog.String("status", string(ack)))
-	c.logger.Log(context.Background(), level, "new event", logArgs...)
+	s.logger.Log(context.Background(), level, "new event", logArgs...)
 
 	return err
 }

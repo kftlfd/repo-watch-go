@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"repo-watch/internal/events"
 
@@ -82,20 +83,40 @@ func newTestConsumer(t *testing.T, metrics MetricsRecorder) *consumer {
 	return c
 }
 
+func newTestSession(
+	t *testing.T,
+	metrics MetricsRecorder,
+	handler JSONEventHandler,
+	cfg *ConsumerSessionConfig,
+) *consumerSession {
+	t.Helper()
+
+	c := newTestConsumer(t, metrics)
+	session := &consumerSession{
+		client:    c.client,
+		logger:    c.logger,
+		metrics:   c.metrics,
+		ctx:       t.Context(),
+		queueName: "test-queue",
+		handler:   handler,
+		cfg:       ConsumerSessionConfig{HandlerTimeout: defaultHandlerTimeout},
+	}
+	if cfg != nil {
+		session.cfg = *cfg
+	}
+	return session
+}
+
 func TestHandleDeliveryDiscardsInvalidEnvelope(t *testing.T) {
 	called := false
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
-	c := newTestConsumer(t, metrics)
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		called = true
+		return Ack, nil
+	}, nil)
 
-	err := c.handleDelivery(
-		testDelivery(acknowledger, `{"id":`),
-		"test-queue",
-		func(events.Envelope) (AckType, error) {
-			called = true
-			return Ack, nil
-		},
-	)
+	err := s.handleDelivery(testDelivery(acknowledger, `{"id":`))
 
 	require.NoError(t, err)
 	require.False(t, called)
@@ -114,15 +135,13 @@ func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 	var got events.Envelope
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
-	c := newTestConsumer(t, metrics)
+	s := newTestSession(t, metrics, func(_ context.Context, msg events.Envelope) (AckType, error) {
+		got = msg
+		return NackRequeue, wantErr
+	}, nil)
 
-	err := c.handleDelivery(
+	err := s.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
-		"test-queue",
-		func(msg events.Envelope) (AckType, error) {
-			got = msg
-			return NackRequeue, wantErr
-		},
 	)
 
 	require.NoError(t, err)
@@ -141,14 +160,12 @@ func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 func TestHandleDeliveryAcksSuccessfulHandler(t *testing.T) {
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
-	c := newTestConsumer(t, metrics)
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return Ack, nil
+	}, nil)
 
-	err := c.handleDelivery(
+	err := s.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
-		"test-queue",
-		func(events.Envelope) (AckType, error) {
-			return Ack, nil
-		},
 	)
 
 	require.NoError(t, err)
@@ -164,14 +181,12 @@ func TestHandleDeliveryAcksSuccessfulHandler(t *testing.T) {
 func TestHandleDeliveryReturnsAckError(t *testing.T) {
 	ackErr := errors.New("ack failed")
 	acknowledger := &fakeAcknowledger{err: ackErr}
-	c := newTestConsumer(t, &fakeConsumerMetrics{})
+	s := newTestSession(t, &fakeConsumerMetrics{}, func(context.Context, events.Envelope) (AckType, error) {
+		return Ack, nil
+	}, nil)
 
-	err := c.handleDelivery(
+	err := s.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
-		"test-queue",
-		func(events.Envelope) (AckType, error) {
-			return Ack, nil
-		},
 	)
 
 	require.ErrorIs(t, err, ackErr)
@@ -181,14 +196,12 @@ func TestHandleDeliveryRequeuesAckWithErrorAsDefect(t *testing.T) {
 	handlerErr := errors.New("post-ack failure")
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
-	c := newTestConsumer(t, metrics)
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return Ack, handlerErr
+	}, nil)
 
-	err := c.handleDelivery(
+	err := s.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
-		"test-queue",
-		func(events.Envelope) (AckType, error) {
-			return Ack, handlerErr
-		},
 	)
 
 	require.NoError(t, err)
@@ -205,14 +218,12 @@ func TestHandleDeliveryRequeuesAckWithErrorAsDefect(t *testing.T) {
 func TestHandleDeliveryReturnsInvalidAckAsFatalDefect(t *testing.T) {
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
-	c := newTestConsumer(t, metrics)
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return AckType("not-a-valid-ack"), nil
+	}, nil)
 
-	err := c.handleDelivery(
+	err := s.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
-		"test-queue",
-		func(events.Envelope) (AckType, error) {
-			return AckType("not-a-valid-ack"), nil
-		},
 	)
 
 	require.ErrorIs(t, err, errInvalidAck)
@@ -224,6 +235,22 @@ func TestHandleDeliveryReturnsInvalidAckAsFatalDefect(t *testing.T) {
 	require.Equal(t, 1, metrics.failures)
 	require.Equal(t, 1, metrics.defects)
 	require.Zero(t, metrics.requeues)
+}
+
+func TestHandleDeliveryAppliesHandlerTimeout(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	s := newTestSession(t, &fakeConsumerMetrics{}, func(ctx context.Context, _ events.Envelope) (AckType, error) {
+		<-ctx.Done()
+		return NackRequeue, ctx.Err()
+	}, &ConsumerSessionConfig{HandlerTimeout: 10 * time.Millisecond})
+
+	err := s.handleDelivery(
+		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
+	)
+
+	require.NoError(t, err)
+	require.True(t, acknowledger.nackCalled)
+	require.True(t, acknowledger.nackRequeue)
 }
 
 func TestIsFatalConsumeError(t *testing.T) {
@@ -263,9 +290,9 @@ func TestConsumeJSONReturnsNilWhenContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.NoError(t, c.ConsumeJSON(ctx, "test-queue", func(events.Envelope) (AckType, error) {
+	require.NoError(t, c.ConsumeJSON(ctx, "test-queue", func(context.Context, events.Envelope) (AckType, error) {
 		return Ack, nil
-	}))
+	}, nil))
 }
 
 func TestConsumeJSONReturnsClosedWhenClientIsClosed(t *testing.T) {
@@ -275,8 +302,8 @@ func TestConsumeJSONReturnsClosedWhenClientIsClosed(t *testing.T) {
 	c, err := NewConsumer(client, testLogger(), nil)
 	require.NoError(t, err)
 
-	err = c.ConsumeJSON(context.Background(), "test-queue", func(events.Envelope) (AckType, error) {
+	err = c.ConsumeJSON(context.Background(), "test-queue", func(context.Context, events.Envelope) (AckType, error) {
 		return Ack, nil
-	})
+	}, nil)
 	require.ErrorIs(t, err, ErrClosed)
 }

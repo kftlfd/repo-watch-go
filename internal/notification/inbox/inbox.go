@@ -41,10 +41,10 @@ func NewInboxWorker(d Deps) (*inboxWorker, error) {
 
 func (w *inboxWorker) Start(ctx context.Context) error {
 	w.logger.Info("starting")
-	return w.consumer.ConsumeJSON(ctx, rabbitmq.QueueNotificationInbox, w.handler)
+	return w.consumer.ConsumeJSON(ctx, rabbitmq.QueueNotificationInbox, w.handler, nil)
 }
 
-func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
+func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitmq.AckType, error) {
 	if err := events.Validate(msg.EventType, msg.Version); err != nil {
 		return rabbitmq.NackDiscard, err
 	}
@@ -56,7 +56,7 @@ func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
 		if err := json.Unmarshal(msg.Payload, &ev); err != nil {
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}
-		if err := w.q.CreateOrUpdateSubscription(context.Background(), dbGen.CreateOrUpdateSubscriptionParams{
+		if err := w.q.CreateOrUpdateSubscription(ctx, dbGen.CreateOrUpdateSubscriptionParams{
 			Email:         ev.Email,
 			RepositoryID:  ev.RepositoryID,
 			Active:        ev.Active,
@@ -79,7 +79,7 @@ func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
 		if err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("marshal payload: %w", err)
 		}
-		if err := w.q.CreateNewReleaseOutboxNotifications(context.Background(), dbGen.CreateNewReleaseOutboxNotificationsParams{
+		if err := w.q.CreateNewReleaseOutboxNotifications(ctx, dbGen.CreateNewReleaseOutboxNotificationsParams{
 			RepositoryID: ev.RepositoryID,
 			Tag:          ev.Tag,
 			Payload:      payload,
@@ -97,7 +97,7 @@ func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
 		if err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("marshal payload: %w", err)
 		}
-		if err := w.q.DeactivateSubsForRepoAndNotifySubs(context.Background(), dbGen.DeactivateSubsForRepoAndNotifySubsParams{
+		if err := w.q.DeactivateSubsForRepoAndNotifySubs(ctx, dbGen.DeactivateSubsForRepoAndNotifySubsParams{
 			RepositoryID: ev.RepositoryID,
 			Tag:          "repo_removed:" + msg.EventID,
 			Payload:      payload,

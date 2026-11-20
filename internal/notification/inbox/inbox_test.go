@@ -22,7 +22,7 @@ func TestHandlerDiscardsInvalidPayload(t *testing.T) {
 		events.EventRepositoryRemoved,
 	} {
 		t.Run(eventType, func(t *testing.T) {
-			ack, err := w.handler(events.Envelope{
+			ack, err := w.handler(t.Context(), events.Envelope{
 				EventType: eventType,
 				Payload:   json.RawMessage(`not-json`),
 			})
@@ -36,7 +36,7 @@ func TestHandlerDiscardsInvalidPayload(t *testing.T) {
 func TestHandlerDiscardsUnsupportedVersion(t *testing.T) {
 	w := &inboxWorker{}
 
-	ack, err := w.handler(events.Envelope{
+	ack, err := w.handler(t.Context(), events.Envelope{
 		EventType: events.EventReleaseDetected,
 		Version:   events.VersionReleaseDetected + 1,
 		Payload:   json.RawMessage(`{}`),
@@ -49,7 +49,7 @@ func TestHandlerDiscardsUnsupportedVersion(t *testing.T) {
 func TestHandlerDiscardsUnknownEventType(t *testing.T) {
 	w := &inboxWorker{}
 
-	ack, err := w.handler(events.Envelope{
+	ack, err := w.handler(t.Context(), events.Envelope{
 		EventType: "unknown.event",
 		Version:   1,
 		Payload:   json.RawMessage(`{}`),
@@ -66,7 +66,7 @@ func TestHandlerRequeuesTransientDatabaseFailure(t *testing.T) {
 
 	w := &inboxWorker{q: dbGen.New(db)}
 
-	ack, err := w.handler(events.Envelope{
+	ack, err := w.handler(t.Context(), events.Envelope{
 		EventType: events.EventSubscriptionChanged,
 		Payload: json.RawMessage(`{
 			"email": "alice@example.com",

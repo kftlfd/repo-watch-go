@@ -48,10 +48,10 @@ func NewMailer(d Deps) (*mailerWorker, error) {
 
 func (m *mailerWorker) Start(ctx context.Context) error {
 	m.logger.Info("starting")
-	return m.consumer.ConsumeJSON(ctx, rabbitmq.QueueMailerInbox, m.handler)
+	return m.consumer.ConsumeJSON(ctx, rabbitmq.QueueMailerInbox, m.handler, nil)
 }
 
-func (m *mailerWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
+func (m *mailerWorker) handler(_ context.Context, msg events.Envelope) (rabbitmq.AckType, error) {
 	if err := events.Validate(msg.EventType, msg.Version); err != nil {
 		m.metrics.Failed("unsupported_event")
 		return rabbitmq.NackDiscard, err

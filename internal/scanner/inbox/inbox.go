@@ -40,10 +40,10 @@ func NewInboxWorker(d Deps) (*inboxWorker, error) {
 
 func (w *inboxWorker) Start(ctx context.Context) error {
 	w.logger.Info("starting")
-	return w.consumer.ConsumeJSON(ctx, rabbitmq.QueueScannerInbox, w.handler)
+	return w.consumer.ConsumeJSON(ctx, rabbitmq.QueueScannerInbox, w.handler, nil)
 }
 
-func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
+func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitmq.AckType, error) {
 	if err := events.Validate(msg.EventType, msg.Version); err != nil {
 		return rabbitmq.NackDiscard, err
 	}
@@ -56,7 +56,7 @@ func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}
 
-		err := w.q.CreateOrUpdateRepo(context.Background(), dbGen.CreateOrUpdateRepoParams{
+		err := w.q.CreateOrUpdateRepo(ctx, dbGen.CreateOrUpdateRepoParams{
 			ID:            ev.RepositoryID,
 			Owner:         ev.Owner,
 			Name:          ev.Name,

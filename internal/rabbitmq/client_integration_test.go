@@ -50,10 +50,10 @@ func TestClientRecoversAfterRabbitMQRestart(t *testing.T) {
 	consumer, err := NewConsumer(client, testLogger(), nil)
 	require.NoError(t, err)
 	go func() {
-		_ = consumer.ConsumeJSON(ctx, QueueMailerInbox, func(msg events.Envelope) (AckType, error) {
+		_ = consumer.ConsumeJSON(ctx, QueueMailerInbox, func(_ context.Context, msg events.Envelope) (AckType, error) {
 			received <- msg
 			return Ack, nil
-		})
+		}, nil)
 	}()
 
 	publish := func(id string) {

@@ -16,7 +16,7 @@ import (
 func TestHandlerDiscardsInvalidPayload(t *testing.T) {
 	w := &inboxWorker{}
 
-	ack, err := w.handler(events.Envelope{
+	ack, err := w.handler(t.Context(), events.Envelope{
 		EventType: events.EventRepositoryRemoved,
 		Payload:   json.RawMessage(`not-json`),
 	})
@@ -35,7 +35,7 @@ func TestHandlerRequeuesTransientDatabaseFailure(t *testing.T) {
 		q:  dbGen.New(db),
 	}
 
-	ack, err := w.handler(events.Envelope{
+	ack, err := w.handler(t.Context(), events.Envelope{
 		EventType: events.EventRepositoryRemoved,
 		Payload: json.RawMessage(`{
 			"repository_id": "owner/repo",
