@@ -12,6 +12,10 @@ CREATE TABLE repositories (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE INDEX repositories_active_last_checked_idx ON repositories (last_checked_at)
+WHERE
+    active = true;
+
 CREATE TABLE releases (
     id SERIAL PRIMARY KEY,
     repository_id TEXT NOT NULL REFERENCES repositories (id),
@@ -66,5 +70,7 @@ DROP INDEX IF EXISTS releases_created_at_idx;
 DROP TABLE IF EXISTS outbox;
 
 DROP TABLE IF EXISTS releases;
+
+DROP INDEX IF EXISTS repositories_active_last_checked_idx;
 
 DROP TABLE IF EXISTS repositories;

@@ -11,6 +11,10 @@ CREATE TABLE subscriptions (
     UNIQUE (email, repository_id)
 );
 
+CREATE INDEX subscriptions_active_repository_idx ON subscriptions (repository_id)
+WHERE
+    active = true;
+
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
     type TEXT NOT NULL,
@@ -54,5 +58,7 @@ DROP INDEX IF EXISTS outbox_dedupe_idx;
 DROP INDEX IF EXISTS outbox_retryable_idx;
 
 DROP TABLE IF EXISTS outbox;
+
+DROP INDEX IF EXISTS subscriptions_active_repository_idx;
 
 DROP TABLE IF EXISTS subscriptions;

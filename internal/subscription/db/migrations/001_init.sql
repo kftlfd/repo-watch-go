@@ -22,6 +22,10 @@ CREATE TABLE subscriptions (
     UNIQUE (email, repository_id)
 );
 
+CREATE INDEX subscriptions_active_repository_idx ON subscriptions (repository_id)
+WHERE
+    active = true;
+
 CREATE TABLE tokens (
     id SERIAL PRIMARY KEY,
     subscription_id INTEGER NOT NULL REFERENCES subscriptions (id),
@@ -85,6 +89,8 @@ DROP INDEX IF EXISTS tokens_unsub_created_at_idx;
 DROP INDEX IF EXISTS tokens_confirm_created_at_idx;
 
 DROP TABLE IF EXISTS tokens;
+
+DROP INDEX IF EXISTS subscriptions_active_repository_idx;
 
 DROP TABLE IF EXISTS subscriptions;
 
