@@ -10,6 +10,7 @@ import (
 
 const (
 	publishedOutboxRetention = time.Hour * 24 * 14
+	failedOutboxRetention    = time.Hour * 24 * 30
 	oldReleasesRetention     = time.Hour * 24 * 90
 )
 
@@ -22,6 +23,13 @@ func CreateCleanupTasks(
 			Name: "outbox",
 			Do: func(ctx context.Context) error {
 				_, err := queries.DeletePublishedOutbox(ctx, now().Add(-publishedOutboxRetention))
+				return err
+			},
+		},
+		{
+			Name: "failed outbox",
+			Do: func(ctx context.Context) error {
+				_, err := queries.DeleteFailedOutbox(ctx, now().Add(-failedOutboxRetention))
 				return err
 			},
 		},

@@ -48,7 +48,13 @@ CREATE INDEX outbox_published_at_idx ON outbox (published_at)
 WHERE
     published_at IS NOT NULL;
 
+CREATE INDEX outbox_failed_at_idx ON outbox (failed_at)
+WHERE
+    failed_at IS NOT NULL;
+
 -- +goose Down
+DROP INDEX IF EXISTS outbox_failed_at_idx;
+
 DROP INDEX IF EXISTS outbox_published_at_idx;
 
 DROP INDEX IF EXISTS outbox_retryable_idx;
