@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/rabbitmq/amqp091-go"
 
@@ -21,7 +22,21 @@ const (
 	QueueMailerInbox       = "repo-watch.mailer.inbox"
 
 	inboxDeliveryLimit = 10
+
+	// Dead letters are kept for investigation, but not forever. The TTL is
+	// applied when the queue is first declared; changing it requires deleting
+	// and redeclaring the queue (or using a RabbitMQ policy instead).
+	dlqMessageTTL = 30 * 24 * time.Hour
+	dlqMaxLength  = 10_000
 )
+
+func dlqQueueArgs() amqp091.Table {
+	return amqp091.Table{
+		"x-message-ttl": int64(dlqMessageTTL / time.Millisecond),
+		"x-max-length":  int64(dlqMaxLength),
+		"x-overflow":    "drop-head",
+	}
+}
 
 func inboxQueueArgs() amqp091.Table {
 	return amqp091.Table{
@@ -81,7 +96,7 @@ func EnsureTopology(conn *amqp091.Connection) error {
 		false, // auto-delete
 		false, // exclusive
 		false, // no-wait
-		nil,
+		dlqQueueArgs(),
 	); err != nil {
 		return fmt.Errorf("declare DLQ: %w", err)
 	}
