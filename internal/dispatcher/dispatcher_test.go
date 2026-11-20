@@ -37,11 +37,12 @@ type fakeStore struct {
 }
 
 type failureRecord struct {
-	ID          int32
-	LastError   string
-	Terminal    bool
-	MaxAttempts int32
-	Result      Failure
+	ID            int32
+	LastError     string
+	Terminal      bool
+	MaxAttempts   int32
+	NextAttemptAt time.Time
+	Result        Failure
 }
 
 func (s *fakeStore) GetNextBatch(ctx context.Context, batchSize int32, leasedUntil time.Time) ([]Row, error) {
@@ -73,6 +74,7 @@ func (s *fakeStore) RecordFailure(
 	lastError string,
 	terminal bool,
 	maxAttempts int32,
+	nextAttemptAt time.Time,
 ) (Failure, error) {
 	if s.attempts == nil {
 		s.attempts = map[int32]int32{}
@@ -80,10 +82,11 @@ func (s *fakeStore) RecordFailure(
 	s.attempts[id]++
 
 	rec := failureRecord{
-		ID:          id,
-		LastError:   lastError,
-		Terminal:    terminal,
-		MaxAttempts: maxAttempts,
+		ID:            id,
+		LastError:     lastError,
+		Terminal:      terminal,
+		MaxAttempts:   maxAttempts,
+		NextAttemptAt: nextAttemptAt,
 	}
 	if s.recordErr != nil {
 		s.failures = append(s.failures, rec)
@@ -265,9 +268,7 @@ func TestRunIterationMarksOnlySuccessfullyPublishedIDs(t *testing.T) {
 	store := &fakeStore{rows: []Row{testRow(1), testRow(2), testRow(3)}}
 	pub := &fakePublisher{errs: []error{nil, errors.New("broker down")}}
 	metrics := &fakeMetrics{}
-	d := newTestDispatcher(t, store, pub, cfg, metrics, withSleep(func(context.Context, time.Duration) error {
-		return nil
-	}))
+	d := newTestDispatcher(t, store, pub, cfg, metrics)
 
 	processed, err := d.runIteration(context.Background())
 
@@ -282,28 +283,58 @@ func TestRunIterationMarksOnlySuccessfullyPublishedIDs(t *testing.T) {
 	require.Equal(t, 1, metrics.deadLettered)
 }
 
-func TestRunIterationRetriesPublishWithinLease(t *testing.T) {
+func TestRunIterationSchedulesRetry(t *testing.T) {
+	now := time.Now()
 	store := &fakeStore{rows: []Row{testRow(1)}}
-	pub := &fakePublisher{errs: []error{errors.New("temporary failure"), nil}}
+	pub := &fakePublisher{alwaysErr: errors.New("temporary failure")}
 	metrics := &fakeMetrics{}
-	var delays []time.Duration
-	d := newTestDispatcher(t, store, pub, testConfig(), metrics, withSleep(func(_ context.Context, delay time.Duration) error {
-		delays = append(delays, delay)
-		return nil
-	}))
+	d := newTestDispatcher(t, store, pub, testConfig(), metrics,
+		withNow(func() time.Time { return now }),
+		withSleep(func(context.Context, time.Duration) error {
+			t.Fatal("row retries must not sleep inside an iteration")
+			return nil
+		}),
+	)
 
 	processed, err := d.runIteration(context.Background())
 
 	require.NoError(t, err)
-	require.Equal(t, 1, processed)
-	require.Len(t, pub.calls, 2)
-	require.Equal(t, []int32{1}, store.markPublishedIDs)
+	require.Zero(t, processed)
+	require.Len(t, pub.calls, 1, "a failed row is scheduled, not retried immediately")
+	require.Empty(t, store.markPublishedIDs)
 	require.Len(t, store.failures, 1)
+	require.Equal(t, int32(1), store.failures[0].ID)
 	require.False(t, store.failures[0].Result.Terminal)
-	require.Equal(t, []time.Duration{time.Millisecond}, delays)
+	require.Equal(t, now.Add(time.Millisecond), store.failures[0].NextAttemptAt)
 	require.Equal(t, 1, metrics.retries)
-	require.Equal(t, 1, metrics.published)
+	require.Zero(t, metrics.published)
 	require.Zero(t, metrics.deadLettered)
+}
+
+func TestRunIterationSchedulesRetryUsingCurrentAttempt(t *testing.T) {
+	now := time.Now()
+	row := testRow(1)
+	row.Attempts = 2
+
+	cfg := testConfig()
+	cfg.MaxAttempts = ptr(int32(4))
+
+	store := &fakeStore{
+		rows:     []Row{row},
+		attempts: map[int32]int32{1: 2},
+	}
+	pub := &fakePublisher{alwaysErr: errors.New("temporary failure")}
+	metrics := &fakeMetrics{}
+	d := newTestDispatcher(t, store, pub, cfg, metrics,
+		withNow(func() time.Time { return now }),
+	)
+
+	_, err := d.runIteration(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, store.failures, 1)
+	// retryDelay(3) with 1ms base and 10ms cap is 4ms.
+	require.Equal(t, now.Add(4*time.Millisecond), store.failures[0].NextAttemptAt)
 }
 
 func TestRunIterationDeadLettersInvalidEventType(t *testing.T) {
@@ -348,34 +379,6 @@ func TestRunIterationDeadLettersInvalidPayload(t *testing.T) {
 	require.True(t, store.failures[0].Result.Terminal)
 	require.Equal(t, row.InvalidReason, store.failures[0].LastError)
 	require.Equal(t, 1, metrics.deadLettered)
-}
-
-func TestRunIterationStopsRetryingAfterLeaseExpiry(t *testing.T) {
-	store := &fakeStore{rows: []Row{testRow(1)}}
-	metrics := &fakeMetrics{}
-
-	now := time.Now()
-	pub := &fakePublisher{errs: []error{errors.New("broker down")}}
-	d := newTestDispatcher(t, store, pub, testConfig(), metrics,
-		withNow(func() time.Time { return now }),
-		withSleep(func(context.Context, time.Duration) error {
-			t.Fatal("sleep must not be called after the lease expires")
-			return nil
-		}),
-	)
-	pub.onPublish = func(context.Context) {
-		now = now.Add(2 * time.Second)
-	}
-
-	processed, err := d.runIteration(context.Background())
-
-	require.ErrorContains(t, err, "lease expires before retry")
-	require.Zero(t, processed)
-	require.Len(t, pub.calls, 1)
-	require.Empty(t, store.markPublishedIDs)
-	require.Len(t, store.failures, 1)
-	require.False(t, store.failures[0].Result.Terminal)
-	require.Zero(t, metrics.deadLettered)
 }
 
 func TestRunIterationDoesNotConsumeAttemptWhenClientIsUnavailable(t *testing.T) {
@@ -472,23 +475,27 @@ func TestRunIterationDeadLettersAfterAttemptLimit(t *testing.T) {
 	cfg := testConfig()
 	cfg.MaxAttempts = ptr(int32(2))
 
-	store := &fakeStore{rows: []Row{testRow(1)}}
+	row := testRow(1)
+	row.Attempts = 1
+
+	store := &fakeStore{
+		rows:     []Row{row},
+		attempts: map[int32]int32{1: 1},
+	}
 	pub := &fakePublisher{alwaysErr: errors.New("broker down")}
 	metrics := &fakeMetrics{}
-	d := newTestDispatcher(t, store, pub, cfg, metrics, withSleep(func(context.Context, time.Duration) error {
-		return nil
-	}))
+	d := newTestDispatcher(t, store, pub, cfg, metrics)
 
 	processed, err := d.runIteration(context.Background())
 
 	require.ErrorContains(t, err, "exceeded 2 attempts")
 	require.Equal(t, 1, processed)
-	require.Len(t, pub.calls, 2)
+	require.Len(t, pub.calls, 1)
 	require.Empty(t, store.markPublishedIDs)
-	require.Len(t, store.failures, 2)
-	require.False(t, store.failures[0].Result.Terminal)
-	require.True(t, store.failures[1].Result.Terminal)
-	require.Equal(t, 1, metrics.retries)
+	require.Len(t, store.failures, 1)
+	require.True(t, store.failures[0].Result.Terminal)
+	require.True(t, store.failures[0].NextAttemptAt.IsZero())
+	require.Zero(t, metrics.retries)
 	require.Equal(t, 1, metrics.deadLettered)
 }
 

@@ -76,12 +76,14 @@ func (s *scannerOutbox) RecordFailure(
 	lastError string,
 	terminal bool,
 	maxAttempts int32,
+	nextAttemptAt time.Time,
 ) (dispatcher.Failure, error) {
 	res, err := s.q.RecordOutboxFailure(ctx, dbGen.RecordOutboxFailureParams{
-		ID:          id,
-		LastError:   lastError,
-		Terminal:    terminal,
-		MaxAttempts: maxAttempts,
+		ID:            id,
+		LastError:     lastError,
+		Terminal:      terminal,
+		MaxAttempts:   maxAttempts,
+		NextAttemptAt: nextAttemptAt,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return dispatcher.Failure{Terminal: true}, nil

@@ -11,19 +11,20 @@ import (
 )
 
 type Outbox struct {
-	ID           int32
-	Type         string
-	Email        string
-	RepositoryID string
-	Tag          string
-	UnsubToken   string
-	Payload      json.RawMessage
-	CreatedAt    time.Time
-	LeasedUntil  sql.NullTime
-	PublishedAt  sql.NullTime
-	Attempts     int32
-	LastError    string
-	FailedAt     sql.NullTime
+	ID            int32
+	Type          string
+	Email         string
+	RepositoryID  string
+	Tag           string
+	UnsubToken    string
+	Payload       json.RawMessage
+	CreatedAt     time.Time
+	LeasedUntil   sql.NullTime
+	NextAttemptAt sql.NullTime
+	PublishedAt   sql.NullTime
+	Attempts      int32
+	LastError     string
+	FailedAt      sql.NullTime
 }
 
 type ProcessedEvent struct {

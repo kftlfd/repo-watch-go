@@ -41,6 +41,7 @@ CREATE TABLE outbox (
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     leased_until TIMESTAMPTZ,
+    next_attempt_at TIMESTAMPTZ,
     published_at TIMESTAMPTZ,
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT '',
@@ -51,7 +52,7 @@ CREATE INDEX outbox_unpublished_idx ON outbox (created_at)
 WHERE
     published_at IS NULL;
 
-CREATE INDEX outbox_retryable_idx ON outbox (id)
+CREATE INDEX outbox_retryable_idx ON outbox (next_attempt_at ASC NULLS FIRST, id)
 WHERE
     published_at IS NULL
     AND failed_at IS NULL;

@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -60,7 +61,7 @@ INSERT INTO
     outbox (event_type, event_version, payload)
 VALUES
     ($1, $2, $3)
-RETURNING id, event_type, event_version, payload, created_at, leased_until, published_at, attempts, last_error, failed_at
+RETURNING id, event_type, event_version, payload, created_at, leased_until, next_attempt_at, published_at, attempts, last_error, failed_at
 `
 
 type CreateOutboxRowParams struct {
@@ -79,6 +80,7 @@ func (q *Queries) CreateOutboxRow(ctx context.Context, arg CreateOutboxRowParams
 		&i.Payload,
 		&i.CreatedAt,
 		&i.LeasedUntil,
+		&i.NextAttemptAt,
 		&i.PublishedAt,
 		&i.Attempts,
 		&i.LastError,
@@ -127,8 +129,9 @@ WITH candidates AS (
     FROM outbox
     WHERE published_at IS NULL
         AND failed_at IS NULL
+        AND (next_attempt_at IS NULL OR next_attempt_at <= now())
         AND (leased_until IS NULL OR leased_until < now())
-    ORDER BY id ASC
+    ORDER BY next_attempt_at ASC NULLS FIRST, id ASC
     LIMIT $1
     FOR UPDATE SKIP LOCKED
 )
@@ -136,7 +139,7 @@ UPDATE outbox
 SET leased_until = $2
 FROM candidates
 WHERE outbox.id = candidates.id
-RETURNING outbox.id, outbox.event_type, outbox.event_version, outbox.payload, outbox.created_at, outbox.leased_until, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
+RETURNING outbox.id, outbox.event_type, outbox.event_version, outbox.payload, outbox.created_at, outbox.leased_until, outbox.next_attempt_at, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
 `
 
 type GetOutboxBatchParams struct {
@@ -160,6 +163,7 @@ func (q *Queries) GetOutboxBatch(ctx context.Context, arg GetOutboxBatchParams) 
 			&i.Payload,
 			&i.CreatedAt,
 			&i.LeasedUntil,
+			&i.NextAttemptAt,
 			&i.PublishedAt,
 			&i.Attempts,
 			&i.LastError,
@@ -237,7 +241,8 @@ func (q *Queries) GetReposScanBatch(ctx context.Context, arg GetReposScanBatchPa
 const markOutboxPublished = `-- name: MarkOutboxPublished :exec
 UPDATE outbox
 SET published_at = now(),
-    leased_until = NULL
+    leased_until = NULL,
+    next_attempt_at = NULL
 WHERE id = ANY($1::int[])
     AND published_at IS NULL
 `
@@ -298,27 +303,30 @@ SET
         THEN now()
         ELSE NULL
     END,
-    leased_until = CASE
+    next_attempt_at = CASE
         WHEN $2::boolean OR attempts + 1 >= $3
         THEN NULL
-        ELSE leased_until
-    END
-WHERE id = $4
+        ELSE $4::timestamptz
+    END,
+    leased_until = NULL
+WHERE id = $5
     AND published_at IS NULL
     AND failed_at IS NULL
-RETURNING attempts, failed_at
+RETURNING attempts, failed_at, next_attempt_at
 `
 
 type RecordOutboxFailureParams struct {
-	LastError   string
-	Terminal    bool
-	MaxAttempts int32
-	ID          int32
+	LastError     string
+	Terminal      bool
+	MaxAttempts   int32
+	NextAttemptAt time.Time
+	ID            int32
 }
 
 type RecordOutboxFailureRow struct {
-	Attempts int32
-	FailedAt sql.NullTime
+	Attempts      int32
+	FailedAt      sql.NullTime
+	NextAttemptAt sql.NullTime
 }
 
 func (q *Queries) RecordOutboxFailure(ctx context.Context, arg RecordOutboxFailureParams) (RecordOutboxFailureRow, error) {
@@ -326,9 +334,10 @@ func (q *Queries) RecordOutboxFailure(ctx context.Context, arg RecordOutboxFailu
 		arg.LastError,
 		arg.Terminal,
 		arg.MaxAttempts,
+		arg.NextAttemptAt,
 		arg.ID,
 	)
 	var i RecordOutboxFailureRow
-	err := row.Scan(&i.Attempts, &i.FailedAt)
+	err := row.Scan(&i.Attempts, &i.FailedAt, &i.NextAttemptAt)
 	return i, err
 }
