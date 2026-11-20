@@ -12,6 +12,7 @@ import (
 const (
 	publishedOutboxRetention = 2 * rabbitmq.DLQMessageTTL
 	failedOutboxRetention    = time.Hour * 24 * 30
+	processedEventsRetention = 2 * rabbitmq.DLQMessageTTL
 )
 
 func CreateCleanupTasks(
@@ -30,6 +31,13 @@ func CreateCleanupTasks(
 			Name: "failed outbox",
 			Do: func(ctx context.Context) error {
 				_, err := queries.DeleteFailedOutbox(ctx, now().Add(-failedOutboxRetention))
+				return err
+			},
+		},
+		{
+			Name: "processed events",
+			Do: func(ctx context.Context) error {
+				_, err := queries.DeleteProcessedEvents(ctx, now().Add(-processedEventsRetention))
 				return err
 			},
 		},

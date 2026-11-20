@@ -26,6 +26,12 @@ type Outbox struct {
 	FailedAt     sql.NullTime
 }
 
+type ProcessedEvent struct {
+	EventID     string
+	EventType   string
+	ProcessedAt time.Time
+}
+
 type Subscription struct {
 	ID            int32
 	Email         string
