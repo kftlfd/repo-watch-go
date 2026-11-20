@@ -13,15 +13,19 @@ type MetricsRecorder interface {
 	Unavailable()
 	SetPending(count int64)
 	SetOldestAge(age time.Duration)
+	SetFailed(count int64)
+	SetOldestFailedAge(age time.Duration)
 }
 
 type Metrics struct {
-	published    prometheus.Counter
-	retries      prometheus.Counter
-	deadLettered prometheus.Counter
-	unavailable  prometheus.Counter
-	pending      prometheus.Gauge
-	oldestAge    prometheus.Gauge
+	published       prometheus.Counter
+	retries         prometheus.Counter
+	deadLettered    prometheus.Counter
+	unavailable     prometheus.Counter
+	pending         prometheus.Gauge
+	oldestAge       prometheus.Gauge
+	failed          prometheus.Gauge
+	oldestFailedAge prometheus.Gauge
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -50,6 +54,14 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "outbox_oldest_pending_age_seconds",
 			Help: "Age in seconds of the oldest unpublished, non-failed outbox row; 0 when empty.",
 		}),
+		failed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "outbox_failed_events",
+			Help: "Current number of terminal outbox rows that exceeded the delivery attempt limit.",
+		}),
+		oldestFailedAge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "outbox_oldest_failed_age_seconds",
+			Help: "Age in seconds of the oldest failed outbox row; 0 when empty.",
+		}),
 	}
 
 	reg.MustRegister(
@@ -59,6 +71,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		m.unavailable,
 		m.pending,
 		m.oldestAge,
+		m.failed,
+		m.oldestFailedAge,
 	)
 
 	return m
@@ -91,11 +105,22 @@ func (m *Metrics) SetOldestAge(age time.Duration) {
 	m.oldestAge.Set(age.Seconds())
 }
 
+func (m *Metrics) SetFailed(count int64) {
+	m.failed.Set(float64(count))
+}
+
+func (m *Metrics) SetOldestFailedAge(age time.Duration) {
+	age = max(age, 0)
+	m.oldestFailedAge.Set(age.Seconds())
+}
+
 type noopMetrics struct{}
 
-func (noopMetrics) Published(int)              {}
-func (noopMetrics) Retry()                     {}
-func (noopMetrics) DeadLettered()              {}
-func (noopMetrics) Unavailable()               {}
-func (noopMetrics) SetPending(int64)           {}
-func (noopMetrics) SetOldestAge(time.Duration) {}
+func (noopMetrics) Published(int)                    {}
+func (noopMetrics) Retry()                           {}
+func (noopMetrics) DeadLettered()                    {}
+func (noopMetrics) Unavailable()                     {}
+func (noopMetrics) SetPending(int64)                 {}
+func (noopMetrics) SetOldestAge(time.Duration)       {}
+func (noopMetrics) SetFailed(int64)                  {}
+func (noopMetrics) SetOldestFailedAge(time.Duration) {}

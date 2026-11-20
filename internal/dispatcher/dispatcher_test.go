@@ -24,6 +24,9 @@ type fakeStore struct {
 	pendingStats PendingStats
 	pendingErr   error
 
+	failedStats FailedStats
+	failedErr   error
+
 	getCalls         int
 	markPublishedIDs []int32
 	markPublishedErr error
@@ -58,6 +61,10 @@ func (s *fakeStore) MarkPublished(ctx context.Context, ids []int32) error {
 
 func (s *fakeStore) PendingStats(context.Context) (PendingStats, error) {
 	return s.pendingStats, s.pendingErr
+}
+
+func (s *fakeStore) FailedStats(context.Context) (FailedStats, error) {
+	return s.failedStats, s.failedErr
 }
 
 func (s *fakeStore) RecordFailure(
@@ -115,12 +122,14 @@ func (p *fakePublisher) PublishJSON(ctx context.Context, msg events.Envelope) er
 }
 
 type fakeMetrics struct {
-	published    int
-	retries      int
-	deadLettered int
-	unavailable  int
-	pending      int64
-	oldestAge    time.Duration
+	published       int
+	retries         int
+	deadLettered    int
+	unavailable     int
+	pending         int64
+	oldestAge       time.Duration
+	failed          int64
+	oldestFailedAge time.Duration
 }
 
 func (m *fakeMetrics) Published(count int) { m.published += count }
@@ -132,6 +141,12 @@ func (m *fakeMetrics) SetPending(count int64) {
 }
 func (m *fakeMetrics) SetOldestAge(age time.Duration) {
 	m.oldestAge = age
+}
+func (m *fakeMetrics) SetFailed(count int64) {
+	m.failed = count
+}
+func (m *fakeMetrics) SetOldestFailedAge(age time.Duration) {
+	m.oldestFailedAge = age
 }
 
 func ptr[T any](v T) *T {
@@ -500,6 +515,58 @@ func TestPendingStatsFailureDoesNotStopPublishing(t *testing.T) {
 	store := &fakeStore{
 		rows:       []Row{testRow(1)},
 		pendingErr: errors.New("stats unavailable"),
+	}
+	metrics := &fakeMetrics{}
+	d := newTestDispatcher(t, store, &fakePublisher{}, testConfig(), metrics)
+
+	processed, err := d.runIteration(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	require.Equal(t, []int32{1}, store.markPublishedIDs)
+}
+
+func TestRunIterationRecordsFailedStats(t *testing.T) {
+	now := time.Now()
+	store := &fakeStore{
+		failedStats: FailedStats{
+			Count:  3,
+			Oldest: now.Add(-2 * time.Minute),
+		},
+	}
+	metrics := &fakeMetrics{}
+	d := newTestDispatcher(t, store, &fakePublisher{}, testConfig(), metrics,
+		withNow(func() time.Time { return now }),
+	)
+
+	_, err := d.runIteration(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(3), metrics.failed)
+	require.Equal(t, 2*time.Minute, metrics.oldestFailedAge)
+}
+
+func TestRunIterationRecordsEmptyFailedStatsAsZeroAge(t *testing.T) {
+	now := time.Now()
+	store := &fakeStore{
+		failedStats: FailedStats{
+			Count:  0,
+			Oldest: now.Add(-time.Hour),
+		},
+	}
+	metrics := &fakeMetrics{}
+	d := newTestDispatcher(t, store, &fakePublisher{}, testConfig(), metrics,
+		withNow(func() time.Time { return now }),
+	)
+
+	_, err := d.runIteration(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, metrics.failed)
+	require.Zero(t, metrics.oldestFailedAge)
+}
+
+func TestFailedStatsFailureDoesNotStopPublishing(t *testing.T) {
+	store := &fakeStore{
+		rows:      []Row{testRow(1)},
+		failedErr: errors.New("stats unavailable"),
 	}
 	metrics := &fakeMetrics{}
 	d := newTestDispatcher(t, store, &fakePublisher{}, testConfig(), metrics)
