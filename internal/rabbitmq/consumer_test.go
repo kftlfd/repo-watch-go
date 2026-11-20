@@ -40,13 +40,16 @@ func (a *fakeAcknowledger) Reject(_ uint64, requeue bool) error {
 }
 
 type fakeConsumerMetrics struct {
-	handled     []AckType
-	failures    int
-	defects     int
-	requeues    int
-	returns     []string
-	dlqDepth    int
-	dlqDepthSet int
+	handled              []AckType
+	failures             int
+	defects              int
+	requeues             int
+	retriesScheduled     []string
+	retriesExhausted     int
+	retryPublishFailures int
+	returns              []string
+	dlqDepth             int
+	dlqDepthSet          int
 }
 
 func (m *fakeConsumerMetrics) MessageHandled(_ string, ack AckType) {
@@ -56,6 +59,11 @@ func (m *fakeConsumerMetrics) MessageHandled(_ string, ack AckType) {
 func (m *fakeConsumerMetrics) HandlerFailed(string)         { m.failures++ }
 func (m *fakeConsumerMetrics) HandlerDefectDetected(string) { m.defects++ }
 func (m *fakeConsumerMetrics) Requeued(string)              { m.requeues++ }
+func (m *fakeConsumerMetrics) RetryScheduled(_ string, tier string) {
+	m.retriesScheduled = append(m.retriesScheduled, tier)
+}
+func (m *fakeConsumerMetrics) RetryExhausted(string)     { m.retriesExhausted++ }
+func (m *fakeConsumerMetrics) RetryPublishFailed(string) { m.retryPublishFailures++ }
 func (m *fakeConsumerMetrics) MessageReturned(routingKey string) {
 	m.returns = append(m.returns, routingKey)
 }
@@ -73,6 +81,36 @@ func testDelivery(acknowledger *fakeAcknowledger, body string) *amqp091.Delivery
 		MessageId:    "message-1",
 		Body:         []byte(body),
 	}
+}
+
+func testDeliveryWithHeaders(
+	acknowledger *fakeAcknowledger,
+	body string,
+	headers amqp091.Table,
+) *amqp091.Delivery {
+	delivery := testDelivery(acknowledger, body)
+	delivery.Headers = headers
+	return delivery
+}
+
+type retryCall struct {
+	queue   string
+	attempt int32
+}
+
+type fakeRetryPublisher struct {
+	calls []retryCall
+	err   error
+}
+
+func (p *fakeRetryPublisher) PublishRetry(
+	_ context.Context,
+	queue string,
+	_ amqp091.Delivery,
+	attempt int32,
+) error {
+	p.calls = append(p.calls, retryCall{queue: queue, attempt: attempt})
+	return p.err
 }
 
 func newTestConsumer(t *testing.T, metrics MetricsRecorder) *consumer {
@@ -96,6 +134,7 @@ func newTestSession(
 		client:    c.client,
 		logger:    c.logger,
 		metrics:   c.metrics,
+		retryPub:  c.retryPub,
 		ctx:       t.Context(),
 		queueName: "test-queue",
 		handler:   handler,
@@ -178,6 +217,113 @@ func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 	require.Equal(t, 1, metrics.failures)
 	require.Zero(t, metrics.defects)
 	require.Equal(t, 1, metrics.requeues)
+}
+
+func TestHandleDeliverySchedulesFirstRetryTier(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	retryPub := &fakeRetryPublisher{}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return NackRequeue, errors.New("transient database failure")
+	}, nil)
+	s.retryPub = retryPub
+
+	err := s.handleDelivery(
+		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
+	)
+
+	require.NoError(t, err)
+	require.True(t, acknowledger.ackCalled)
+	require.False(t, acknowledger.nackCalled)
+	require.False(t, acknowledger.rejectCalled)
+	require.Len(t, retryPub.calls, 1)
+	require.Equal(t, "test-queue.retry.30s", retryPub.calls[0].queue)
+	require.Equal(t, int32(1), retryPub.calls[0].attempt)
+	require.Equal(t, []AckType{NackRequeue}, metrics.handled)
+	require.Equal(t, []string{"30s"}, metrics.retriesScheduled)
+	require.Zero(t, metrics.requeues)
+	require.Zero(t, metrics.retriesExhausted)
+	require.Zero(t, metrics.retryPublishFailures)
+}
+
+func TestHandleDeliverySchedulesLastRetryTier(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	retryPub := &fakeRetryPublisher{}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return NackRequeue, errors.New("transient database failure")
+	}, nil)
+	s.retryPub = retryPub
+
+	err := s.handleDelivery(testDeliveryWithHeaders(
+		acknowledger,
+		`{"id":"event-1","type":"repository.changed","payload":{}}`,
+		amqp091.Table{retryCountHeader: int32(1)},
+	))
+
+	require.NoError(t, err)
+	require.True(t, acknowledger.ackCalled)
+	require.Len(t, retryPub.calls, 1)
+	require.Equal(t, "test-queue.retry.10m", retryPub.calls[0].queue)
+	require.Equal(t, int32(2), retryPub.calls[0].attempt)
+	require.Equal(t, []string{"10m"}, metrics.retriesScheduled)
+}
+
+func TestHandleDeliveryDeadLettersAfterRetryLimit(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	retryPub := &fakeRetryPublisher{}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return NackRequeue, errors.New("transient database failure")
+	}, nil)
+	s.retryPub = retryPub
+
+	err := s.handleDelivery(testDeliveryWithHeaders(
+		acknowledger,
+		`{"id":"event-1","type":"repository.changed","payload":{}}`,
+		amqp091.Table{retryCountHeader: int32(defaultMaxRetryAttempts)},
+	))
+
+	require.NoError(t, err)
+	require.False(t, acknowledger.ackCalled)
+	require.False(t, acknowledger.nackCalled)
+	require.True(t, acknowledger.rejectCalled)
+	require.False(t, acknowledger.rejectRequeue)
+	require.Empty(t, retryPub.calls)
+	require.Equal(t, 1, metrics.retriesExhausted)
+	require.Zero(t, metrics.requeues)
+}
+
+func TestHandleDeliveryRequeuesWhenRetryPublishFails(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	retryPub := &fakeRetryPublisher{err: errors.New("publish failed")}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return NackRequeue, errors.New("transient database failure")
+	}, nil)
+	s.retryPub = retryPub
+
+	err := s.handleDelivery(
+		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
+	)
+
+	require.NoError(t, err)
+	require.False(t, acknowledger.ackCalled)
+	require.True(t, acknowledger.nackCalled)
+	require.True(t, acknowledger.nackRequeue)
+	require.False(t, acknowledger.rejectCalled)
+	require.Equal(t, 1, metrics.retryPublishFailures)
+	require.Equal(t, 1, metrics.requeues)
+	require.Empty(t, metrics.retriesScheduled)
+}
+
+func TestRetryCountFromHeaders(t *testing.T) {
+	require.Equal(t, int32(0), retryCountFromHeaders(nil))
+	require.Equal(t, int32(0), retryCountFromHeaders(amqp091.Table{"other": int32(1)}))
+	require.Equal(t, int32(2), retryCountFromHeaders(amqp091.Table{retryCountHeader: int32(2)}))
+	require.Equal(t, int32(3), retryCountFromHeaders(amqp091.Table{retryCountHeader: int64(3)}))
+	require.Equal(t, int32(4), retryCountFromHeaders(amqp091.Table{retryCountHeader: 4}))
+	require.Equal(t, int32(0), retryCountFromHeaders(amqp091.Table{retryCountHeader: "4"}))
 }
 
 func TestHandleDeliveryAcksSuccessfulHandler(t *testing.T) {

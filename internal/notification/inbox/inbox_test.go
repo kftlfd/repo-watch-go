@@ -64,7 +64,10 @@ func TestHandlerRequeuesTransientDatabaseFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	w := &inboxWorker{q: dbGen.New(db)}
+	w := &inboxWorker{
+		db: db,
+		q:  dbGen.New(db),
+	}
 
 	ack, err := w.handler(t.Context(), events.Envelope{
 		EventType: events.EventSubscriptionChanged,

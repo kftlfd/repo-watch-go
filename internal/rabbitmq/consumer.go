@@ -36,18 +36,41 @@ const (
 	consumerRetryMax        = 120 * time.Second
 	consumerStableThreshold = 10 * time.Second
 	defaultHandlerTimeout   = time.Minute
+	defaultMaxRetryAttempts = 4
+	retryPublishTimeout     = 10 * time.Second
 )
 
+// RetryPublisher republishes a failed delivery to a delayed retry queue. The
+// consumer acks the original delivery only after the retry publish has been
+// confirmed, so a publish failure leaves the original message unacked.
+type RetryPublisher interface {
+	PublishRetry(ctx context.Context, queue string, delivery amqp091.Delivery, attempt int32) error
+}
+
+// ConsumerOption customizes a consumer. Options must be applied before
+// ConsumeJSON is called.
+type ConsumerOption func(*consumer)
+
+// WithRetryPublisher enables delayed retries. A consumer without a retry
+// publisher falls back to immediate nack-requeue.
+func WithRetryPublisher(p RetryPublisher) ConsumerOption {
+	return func(c *consumer) {
+		c.retryPub = p
+	}
+}
+
 type consumer struct {
-	client  Client
-	logger  *slog.Logger
-	metrics MetricsRecorder
+	client   Client
+	logger   *slog.Logger
+	metrics  MetricsRecorder
+	retryPub RetryPublisher
 }
 
 func NewConsumer(
 	client Client,
 	logger *slog.Logger,
 	metrics MetricsRecorder,
+	opts ...ConsumerOption,
 ) (*consumer, error) {
 	if client == nil {
 		return nil, fmt.Errorf("missing client")
@@ -59,11 +82,18 @@ func NewConsumer(
 		metrics = noopMetrics{}
 	}
 
-	return &consumer{
+	c := &consumer{
 		client:  client,
 		logger:  logger,
 		metrics: metrics,
-	}, nil
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(c)
+		}
+	}
+
+	return c, nil
 }
 
 // if returning Ack: err must be nil
@@ -82,6 +112,7 @@ func (c *consumer) ConsumeJSON(
 		client:    c.client,
 		logger:    c.logger,
 		metrics:   c.metrics,
+		retryPub:  c.retryPub,
 		ctx:       ctx,
 		queueName: queueName,
 		handler:   handler,
@@ -99,6 +130,10 @@ func (c *consumer) ConsumeJSON(
 // ConsumerSessionConfig configures a single ConsumeJSON run.
 type ConsumerSessionConfig struct {
 	HandlerTimeout time.Duration
+
+	// MaxRetryAttempts is the number of delayed retries after the first
+	// handler failure. Zero uses defaultMaxRetryAttempts.
+	MaxRetryAttempts int32
 }
 
 type consumerSession struct {
@@ -106,9 +141,17 @@ type consumerSession struct {
 	client    Client
 	logger    *slog.Logger
 	metrics   MetricsRecorder
+	retryPub  RetryPublisher
 	ctx       context.Context
 	queueName string
 	handler   JSONEventHandler
+}
+
+func (s *consumerSession) retryLimit() int32 {
+	if s.cfg.MaxRetryAttempts > 0 {
+		return s.cfg.MaxRetryAttempts
+	}
+	return defaultMaxRetryAttempts
 }
 
 func (s *consumerSession) run() error {
@@ -217,6 +260,23 @@ func isFatalConsumeError(err error) bool {
 	return false
 }
 
+func retryCountFromHeaders(headers amqp091.Table) int32 {
+	switch n := headers[retryCountHeader].(type) {
+	case int8:
+		return int32(n)
+	case int16:
+		return int32(n)
+	case int32:
+		return n
+	case int64:
+		return int32(n)
+	case int:
+		return int32(n)
+	default:
+		return 0
+	}
+}
+
 func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 	logArgs := []any{
 		slog.String("queue", s.queueName),
@@ -274,9 +334,55 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 		level = slog.LevelError
 
 	case NackRequeue:
-		err = delivery.Nack(false, true)
 		level = slog.LevelWarn
-		s.metrics.Requeued(s.queueName)
+		if s.retryPub == nil {
+			err = delivery.Nack(false, true)
+			s.metrics.Requeued(s.queueName)
+			break
+		}
+
+		attempt := retryCountFromHeaders(delivery.Headers) + 1
+		if attempt > s.retryLimit() {
+			level = slog.LevelError
+			s.metrics.RetryExhausted(s.queueName)
+			logArgs = append(logArgs,
+				slog.Int("retry_attempt", int(attempt)),
+				slog.String("retry_status", "exhausted"),
+			)
+			err = delivery.Reject(false)
+			break
+		}
+
+		tier := retryTierFor(attempt)
+		retryQueue := retryQueueName(s.queueName, tier)
+
+		retryCtx, cancel := context.WithTimeout(s.ctx, retryPublishTimeout)
+		publishErr := s.retryPub.PublishRetry(retryCtx, retryQueue, *delivery, attempt)
+		cancel()
+
+		logArgs = append(logArgs,
+			slog.Int("retry_attempt", int(attempt)),
+			slog.String("retry_queue", retryQueue),
+			slog.Duration("retry_delay", tier.Delay),
+		)
+		if publishErr != nil {
+			level = slog.LevelError
+			s.metrics.RetryPublishFailed(s.queueName)
+			logArgs = append(logArgs,
+				slog.Any("retry_error", publishErr),
+				slog.String("retry_status", "requeued"),
+			)
+
+			// Keep the event in the inbox. The quorum delivery limit is the
+			// final backstop if retry publishing keeps failing.
+			s.metrics.Requeued(s.queueName)
+			err = delivery.Nack(false, true)
+			break
+		}
+
+		s.metrics.RetryScheduled(s.queueName, tier.Name)
+		logArgs = append(logArgs, slog.String("retry_status", "scheduled"))
+		err = delivery.Ack(false)
 
 	default:
 		err = fmt.Errorf("%w: %q", errInvalidAck, ack)

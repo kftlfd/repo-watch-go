@@ -23,12 +23,59 @@ const (
 
 	inboxDeliveryLimit = 10
 
+	// retryCountHeader carries the number of delayed retries already
+	// scheduled for an inbox message. It survives the retry queue TTL and is
+	// authoritative for choosing the next backoff tier and the retry limit.
+	retryCountHeader = "x-retry-count"
+
 	// DLQMessageTTL is how long dead letters are kept for investigation.
 	// The TTL is applied when the queue is first declared; changing it requires
 	// deleting and redeclaring the queue (or using a RabbitMQ policy instead).
 	DLQMessageTTL = 30 * 24 * time.Hour
 	dlqMaxLength  = 10_000
 )
+
+// retryTier is one delayed retry queue for an inbox.
+type retryTier struct {
+	Name  string
+	Delay time.Duration
+}
+
+// retryTiers defines the backoff schedule for failed inbox deliveries. The
+// first failure is retried after the first tier, the second failure after the
+// second tier, and every later failure keeps using the last tier until the
+// retry limit is exhausted.
+//
+// To add another retry step:
+//  1. Add an entry below with a new, stable Name and the desired Delay.
+//  2. Restart the services. EnsureTopology declares a queue for every tier of
+//     every inbox, so no other wiring is needed.
+//  3. Do not change the Delay or Name of an existing tier. RabbitMQ rejects a
+//     redeclare with different queue arguments (PRECONDITION_FAILED). To change
+//     a delay, add a new tier and delete the old queue after it has drained.
+var retryTiers = []retryTier{
+	{Name: "30s", Delay: 30 * time.Second},
+	{Name: "10m", Delay: 10 * time.Minute},
+}
+
+func retryQueueName(inbox string, tier retryTier) string {
+	return fmt.Sprintf("%s.retry.%s", inbox, tier.Name)
+}
+
+func retryQueueArgs(tier retryTier, inbox string) amqp091.Table {
+	return amqp091.Table{
+		"x-queue-type":              amqp091.QueueTypeQuorum,
+		"x-message-ttl":             int64(tier.Delay / time.Millisecond),
+		"x-dead-letter-exchange":    "",
+		"x-dead-letter-routing-key": inbox,
+	}
+}
+
+func retryTierFor(attempt int32) retryTier {
+	idx := max(int(attempt)-1, 0)
+	idx = min(idx, len(retryTiers)-1)
+	return retryTiers[idx]
+}
 
 func dlqQueueArgs() amqp091.Table {
 	return amqp091.Table{
@@ -146,6 +193,24 @@ func EnsureTopology(conn *amqp091.Connection) error {
 				nil,
 			); err != nil {
 				return fmt.Errorf("bind queue %q to exchange %q with key %q: %w", qDef.name, ExchangeTopic, bKey, err)
+			}
+		}
+
+		// Retry queues are not bound to the topic exchange. The consumer
+		// publishes to them through the default exchange, and after the
+		// queue-level TTL expires they dead-letter straight back into the
+		// inbox queue.
+		for _, tier := range retryTiers {
+			retryName := retryQueueName(qDef.name, tier)
+			if _, err = ch.QueueDeclare(
+				retryName,
+				true,  // durable
+				false, // auto-delete
+				false, // exclusive
+				false, // no-wait
+				retryQueueArgs(tier, qDef.name),
+			); err != nil {
+				return fmt.Errorf("declare retry queue %q: %w", retryName, err)
 			}
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 
 	"github.com/rabbitmq/amqp091-go"
@@ -110,6 +111,91 @@ func (p *publisher) PublishJSON(
 	}
 
 	return nil
+}
+
+// PublishRetry copies a failed delivery into a delayed retry queue. It uses
+// a dedicated channel so the return check cannot race with unrelated
+// publishes on the shared channel. The caller must not ack the original
+// delivery unless this returns nil.
+func (p *publisher) PublishRetry(
+	ctx context.Context,
+	queue string,
+	d amqp091.Delivery,
+	attempt int32,
+) error {
+	if queue == "" {
+		return fmt.Errorf("%w: missing retry queue", ErrInvalid)
+	}
+
+	conn, err := p.client.acquire()
+	if err != nil {
+		return err
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return fmt.Errorf("create retry publisher channel: %w", err)
+	}
+	defer closeChannel(ch)
+
+	if err := ch.Confirm(false); err != nil {
+		return fmt.Errorf("enable retry publisher confirms: %w", err)
+	}
+
+	returns := ch.NotifyReturn(make(chan amqp091.Return, 1))
+
+	headers := make(amqp091.Table, len(d.Headers)+1)
+	maps.Copy(headers, d.Headers)
+	headers[retryCountHeader] = attempt
+
+	msg := amqp091.Publishing{
+		ContentType:     d.ContentType,
+		ContentEncoding: d.ContentEncoding,
+		DeliveryMode:    d.DeliveryMode,
+		Priority:        d.Priority,
+		CorrelationId:   d.CorrelationId,
+		ReplyTo:         d.ReplyTo,
+		MessageId:       d.MessageId,
+		Timestamp:       d.Timestamp,
+		Type:            d.Type,
+		UserId:          d.UserId,
+		AppId:           d.AppId,
+		Headers:         headers,
+		Body:            d.Body,
+	}
+
+	confirmation, err := ch.PublishWithDeferredConfirmWithContext(
+		ctx,
+		"",    // default exchange
+		queue, // retry queue name
+		true,  // mandatory
+		false, // immediate
+		msg,
+	)
+	if err != nil {
+		return fmt.Errorf("publish retry to %q: %w", queue, err)
+	}
+	if confirmation == nil {
+		return errors.New("retry publish confirmation was not created")
+	}
+
+	ack, err := confirmation.WaitContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !ack {
+		return errors.New("retry publisher nack")
+	}
+
+	// A mandatory message that cannot be routed is returned before the
+	// publisher confirm. Never ack the original delivery if the copy was
+	// dropped because the retry queue disappeared.
+	select {
+	case ret := <-returns:
+		return fmt.Errorf("retry publish to %q returned: %s", queue, ret.ReplyText)
+	default:
+		return nil
+	}
 }
 
 // getChannelLocked returns the current open channel, or tries to create

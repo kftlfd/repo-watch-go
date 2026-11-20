@@ -7,6 +7,9 @@ type MetricsRecorder interface {
 	HandlerFailed(queue string)
 	HandlerDefectDetected(queue string)
 	Requeued(queue string)
+	RetryScheduled(queue string, tier string)
+	RetryExhausted(queue string)
+	RetryPublishFailed(queue string)
 	MessageReturned(routingKey string)
 	SetDLQDepth(depth int)
 	SetConnected(connected bool)
@@ -14,14 +17,17 @@ type MetricsRecorder interface {
 }
 
 type metrics struct {
-	messages       *prometheus.CounterVec
-	failures       *prometheus.CounterVec
-	defects        *prometheus.CounterVec
-	requeues       *prometheus.CounterVec
-	publishReturns *prometheus.CounterVec
-	dlqDepth       prometheus.Gauge
-	connected      prometheus.Gauge
-	connectionLost prometheus.Counter
+	messages             *prometheus.CounterVec
+	failures             *prometheus.CounterVec
+	defects              *prometheus.CounterVec
+	requeues             *prometheus.CounterVec
+	retryScheduled       *prometheus.CounterVec
+	retryExhausted       *prometheus.CounterVec
+	retryPublishFailures *prometheus.CounterVec
+	publishReturns       *prometheus.CounterVec
+	dlqDepth             prometheus.Gauge
+	connected            prometheus.Gauge
+	connectionLost       prometheus.Counter
 }
 
 func NewMetrics(reg prometheus.Registerer) *metrics {
@@ -54,6 +60,27 @@ func NewMetrics(reg prometheus.Registerer) *metrics {
 			},
 			[]string{"queue"},
 		),
+		retryScheduled: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "rabbitmq_consumer_retries_scheduled_total",
+				Help: "Total failed deliveries scheduled into delayed retry queues, by queue and tier.",
+			},
+			[]string{"queue", "tier"},
+		),
+		retryExhausted: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "rabbitmq_consumer_retries_exhausted_total",
+				Help: "Total messages dead-lettered because the retry limit was exhausted, by queue.",
+			},
+			[]string{"queue"},
+		),
+		retryPublishFailures: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "rabbitmq_consumer_retry_publish_failures_total",
+				Help: "Total failures to publish a delivery to a delayed retry queue, by queue.",
+			},
+			[]string{"queue"},
+		),
 		publishReturns: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "rabbitmq_publisher_returns_total",
@@ -80,6 +107,9 @@ func NewMetrics(reg prometheus.Registerer) *metrics {
 		m.failures,
 		m.requeues,
 		m.defects,
+		m.retryScheduled,
+		m.retryExhausted,
+		m.retryPublishFailures,
 		m.publishReturns,
 		m.dlqDepth,
 		m.connected,
@@ -103,6 +133,18 @@ func (m *metrics) HandlerDefectDetected(queue string) {
 
 func (m *metrics) Requeued(queue string) {
 	m.requeues.WithLabelValues(queue).Inc()
+}
+
+func (m *metrics) RetryScheduled(queue string, tier string) {
+	m.retryScheduled.WithLabelValues(queue, tier).Inc()
+}
+
+func (m *metrics) RetryExhausted(queue string) {
+	m.retryExhausted.WithLabelValues(queue).Inc()
+}
+
+func (m *metrics) RetryPublishFailed(queue string) {
+	m.retryPublishFailures.WithLabelValues(queue).Inc()
 }
 
 func (m *metrics) MessageReturned(routingKey string) {
@@ -132,6 +174,9 @@ func (noopMetrics) MessageHandled(string, AckType) {}
 func (noopMetrics) HandlerFailed(string)           {}
 func (noopMetrics) HandlerDefectDetected(string)   {}
 func (noopMetrics) Requeued(string)                {}
+func (noopMetrics) RetryScheduled(string, string)  {}
+func (noopMetrics) RetryExhausted(string)          {}
+func (noopMetrics) RetryPublishFailed(string)      {}
 func (noopMetrics) MessageReturned(string)         {}
 func (noopMetrics) SetDLQDepth(int)                {}
 func (noopMetrics) SetConnected(bool)              {}
