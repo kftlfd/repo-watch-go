@@ -4,12 +4,13 @@ import (
 	"context"
 	"time"
 
+	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/db/dbGen"
 	"repo-watch/internal/taskrunner"
 )
 
 const (
-	publishedOutboxRetention = time.Hour * 24 * 14
+	publishedOutboxRetention = 2 * rabbitmq.DLQMessageTTL
 	failedOutboxRetention    = time.Hour * 24 * 30
 	oldReleasesRetention     = time.Hour * 24 * 90
 )

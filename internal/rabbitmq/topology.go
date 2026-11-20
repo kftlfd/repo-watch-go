@@ -23,16 +23,16 @@ const (
 
 	inboxDeliveryLimit = 10
 
-	// Dead letters are kept for investigation, but not forever. The TTL is
-	// applied when the queue is first declared; changing it requires deleting
-	// and redeclaring the queue (or using a RabbitMQ policy instead).
-	dlqMessageTTL = 30 * 24 * time.Hour
+	// DLQMessageTTL is how long dead letters are kept for investigation.
+	// The TTL is applied when the queue is first declared; changing it requires
+	// deleting and redeclaring the queue (or using a RabbitMQ policy instead).
+	DLQMessageTTL = 30 * 24 * time.Hour
 	dlqMaxLength  = 10_000
 )
 
 func dlqQueueArgs() amqp091.Table {
 	return amqp091.Table{
-		"x-message-ttl": int64(dlqMessageTTL / time.Millisecond),
+		"x-message-ttl": int64(DLQMessageTTL / time.Millisecond),
 		"x-max-length":  int64(dlqMaxLength),
 		"x-overflow":    "drop-head",
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/db/dbGen"
 	"repo-watch/internal/subscription/subs"
 	"repo-watch/internal/taskrunner"
@@ -11,7 +12,7 @@ import (
 
 const (
 	tokenRetention              = subs.ConfirmTokenValidity
-	publishedOutboxRetention    = time.Hour * 24 * 14
+	publishedOutboxRetention    = 2 * rabbitmq.DLQMessageTTL
 	failedOutboxRetention       = time.Hour * 24 * 30
 	orphanedUnsubTokenRetention = time.Hour * 24
 )
