@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	tokenRetention           = subs.ConfirmTokenValidity
-	publishedOutboxRetention = time.Hour * 24 * 14
-	failedOutboxRetention    = time.Hour * 24 * 30
+	tokenRetention              = subs.ConfirmTokenValidity
+	publishedOutboxRetention    = time.Hour * 24 * 14
+	failedOutboxRetention       = time.Hour * 24 * 30
+	orphanedUnsubTokenRetention = time.Hour * 24
 )
 
 func CreateCleanupTasks(queries *dbGen.Queries, now func() time.Time) []taskrunner.Task {
@@ -35,6 +36,13 @@ func CreateCleanupTasks(queries *dbGen.Queries, now func() time.Time) []taskrunn
 			Name: "cleanup failed outbox",
 			Do: func(ctx context.Context) error {
 				_, err := queries.DeleteFailedOutbox(ctx, now().Add(-failedOutboxRetention))
+				return err
+			},
+		},
+		{
+			Name: "cleanup orphaned unsub tokens",
+			Do: func(ctx context.Context) error {
+				_, err := queries.DeleteOrphanedUnsubTokens(ctx, now().Add(-orphanedUnsubTokenRetention))
 				return err
 			},
 		},

@@ -35,6 +35,10 @@ CREATE INDEX tokens_confirm_created_at_idx ON tokens (created_at)
 WHERE
     token_type = 'confirm';
 
+CREATE INDEX tokens_unsub_created_at_idx ON tokens (created_at)
+WHERE
+    token_type = 'unsub';
+
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -75,6 +79,8 @@ DROP INDEX IF EXISTS outbox_retryable_idx;
 DROP INDEX IF EXISTS outbox_unpublished_idx;
 
 DROP TABLE IF EXISTS outbox;
+
+DROP INDEX IF EXISTS tokens_unsub_created_at_idx;
 
 DROP INDEX IF EXISTS tokens_confirm_created_at_idx;
 
