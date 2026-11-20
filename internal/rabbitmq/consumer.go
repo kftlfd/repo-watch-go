@@ -239,6 +239,9 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 	if err != nil {
 		ack = NackDiscard
 		err = fmt.Errorf("invalid json envelope: %w", err)
+	} else if msg.EventID == "" {
+		ack = NackDiscard
+		err = fmt.Errorf("missing event id")
 	} else {
 		handlerCtx, cancel := context.WithTimeout(s.ctx, s.cfg.HandlerTimeout)
 		ack, err = s.handler(handlerCtx, msg)

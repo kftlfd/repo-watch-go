@@ -130,6 +130,29 @@ func TestHandleDeliveryDiscardsInvalidEnvelope(t *testing.T) {
 	require.Zero(t, metrics.requeues)
 }
 
+func TestHandleDeliveryDiscardsMissingEventID(t *testing.T) {
+	called := false
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		called = true
+		return Ack, nil
+	}, nil)
+
+	err := s.handleDelivery(testDelivery(acknowledger, `{"type":"repository.changed","payload":{}}`))
+
+	require.NoError(t, err)
+	require.False(t, called)
+	require.True(t, acknowledger.rejectCalled)
+	require.False(t, acknowledger.rejectRequeue)
+	require.False(t, acknowledger.ackCalled)
+	require.False(t, acknowledger.nackCalled)
+	require.Equal(t, []AckType{NackDiscard}, metrics.handled)
+	require.Equal(t, 1, metrics.failures)
+	require.Zero(t, metrics.defects)
+	require.Zero(t, metrics.requeues)
+}
+
 func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 	wantErr := errors.New("transient database failure")
 	var got events.Envelope
