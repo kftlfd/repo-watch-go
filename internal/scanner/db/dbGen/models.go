@@ -23,6 +23,12 @@ type Outbox struct {
 	FailedAt     sql.NullTime
 }
 
+type ProcessedEvent struct {
+	EventID     string
+	EventType   string
+	ProcessedAt time.Time
+}
+
 type Release struct {
 	ID           int32
 	RepositoryID string

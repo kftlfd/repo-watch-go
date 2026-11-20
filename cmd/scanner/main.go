@@ -119,6 +119,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	inboxWorker, err := inbox.NewInboxWorker(inbox.Deps{
 		Logger:         logger,
 		RabbitConsumer: rabbitConsumer,
+		DB:             db,
 		Queries:        queries,
 	})
 	if err != nil {

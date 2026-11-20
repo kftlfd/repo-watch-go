@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,11 +15,13 @@ import (
 type Deps struct {
 	Logger         *slog.Logger
 	RabbitConsumer rabbitmq.RabbitJSONConsumer
+	DB             *sql.DB
 	Queries        *dbGen.Queries
 }
 
 type inboxWorker struct {
 	logger   *slog.Logger
+	db       *sql.DB
 	q        *dbGen.Queries
 	consumer rabbitmq.RabbitJSONConsumer
 }
@@ -30,9 +33,13 @@ func NewInboxWorker(d Deps) (*inboxWorker, error) {
 	if d.Logger == nil {
 		return nil, fmt.Errorf("missing logger")
 	}
+	if d.DB == nil {
+		return nil, fmt.Errorf("missing DB")
+	}
 
 	return &inboxWorker{
 		logger:   d.Logger.With("module", "inbox_worker"),
+		db:       d.DB,
 		q:        d.Queries,
 		consumer: d.RabbitConsumer,
 	}, nil
@@ -56,7 +63,28 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}
 
-		err := w.q.CreateOrUpdateRepo(ctx, dbGen.CreateOrUpdateRepoParams{
+		tx, err := w.db.BeginTx(ctx, nil)
+		if err != nil {
+			return rabbitmq.NackRequeue, fmt.Errorf("begin tx: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		qtx := w.q.WithTx(tx)
+		claimed, err := qtx.ClaimProcessedEvent(ctx, dbGen.ClaimProcessedEventParams{
+			EventID:   msg.EventID,
+			EventType: msg.EventType,
+		})
+		if err != nil {
+			return rabbitmq.NackRequeue, fmt.Errorf("claim event: %w", err)
+		}
+		if claimed == 0 {
+			if err := tx.Commit(); err != nil {
+				return rabbitmq.NackRequeue, fmt.Errorf("commit tx: %w", err)
+			}
+			return rabbitmq.Ack, nil
+		}
+
+		err = qtx.CreateOrUpdateRepo(ctx, dbGen.CreateOrUpdateRepoParams{
 			ID:            ev.RepositoryID,
 			Owner:         ev.Owner,
 			Name:          ev.Name,
@@ -66,6 +94,10 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 		})
 		if err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("update repo: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return rabbitmq.NackRequeue, fmt.Errorf("commit tx: %w", err)
 		}
 
 		return rabbitmq.Ack, nil

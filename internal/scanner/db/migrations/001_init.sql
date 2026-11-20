@@ -26,6 +26,14 @@ CREATE TABLE releases (
 
 CREATE INDEX releases_created_at_idx ON releases (created_at);
 
+CREATE TABLE processed_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX processed_events_processed_at_idx ON processed_events (processed_at);
+
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -68,6 +76,10 @@ DROP INDEX IF EXISTS outbox_unpublished_idx;
 DROP INDEX IF EXISTS releases_created_at_idx;
 
 DROP TABLE IF EXISTS outbox;
+
+DROP INDEX IF EXISTS processed_events_processed_at_idx;
+
+DROP TABLE IF EXISTS processed_events;
 
 DROP TABLE IF EXISTS releases;
 
