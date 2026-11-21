@@ -1,0 +1,214 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: repo-watch-dlq
+    folder: repo-watch-go
+    interval: 1m
+    rules:
+      - uid: dg4zktnr03z0gb
+        title: DLQ not empty
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: max(rabbitmq_queue_messages{queue="repo-watch.dlq"})
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          description: Messages have been dead-lettered
+          summary: Dead-letter queue is not empty
+        labels:
+          severity: warning
+        isPaused: false
+        notification_settings:
+          receiver: empty
+      - uid: fg4zl2gbauvb4a
+        title: DLQ near capacity
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: max(rabbitmq_queue_messages{queue="repo-watch.dlq"})
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 9000
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          description: The DLQ uses drop-head overflow. Old dead letters will be discarded when the limit is reached
+          summary: DLQ is over 9,000 messages
+        labels:
+          severity: critical
+        isPaused: false
+        notification_settings:
+          receiver: empty
+      - uid: cg4zl85pxrpq8c
+        title: DLQ is growing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: delta(rabbitmq_queue_messages{queue="repo-watch.dlq"}[15m])
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          description: New dead letters are arriving faster than the DLQ is being drained
+          summary: DLQ depth is increasing
+        labels:
+          severity: warning
+        isPaused: false
+        notification_settings:
+          receiver: empty
+      - uid: cg4zlm1qq1qtcd
+        title: DLQ queue is missing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: present_over_time(rabbitmq_queue_messages{queue="repo-watch.dlq"}[1m])
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 1
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: repo-watch.dlq does not exist
+        labels:
+          severity: critical
+        isPaused: false
+        notification_settings:
+          receiver: empty

@@ -1,0 +1,162 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: repo-watch-events
+    folder: repo-watch-go
+    interval: 1m
+    rules:
+      - uid: eg4zm33qsj474b
+        title: Outbox has failed events
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: max(outbox_failed_events)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          description: At least one outbox event was abandoned after exhausting its publish attempts
+          summary: Outbox events reached the terminal failure state
+        labels:
+          severity: critical
+        isPaused: false
+        notification_settings:
+          receiver: empty
+      - uid: bg4zmf6zu3da8f
+        title: Inbox retries exhausted
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(increase(rabbitmq_consumer_retries_exhausted_total[10m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          description: Messages are being dead-lettered after repeated handler failures
+          summary: Inbox messages exhausted their retry budget
+        labels:
+          severity: warning
+        isPaused: false
+      - uid: fg4zmiml986ioe
+        title: Outbox oldest pending event is old
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: max(outbox_oldest_pending_age_seconds)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 300
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          description: The outbox dispatcher may be stalled or unable to publish to RabbitMQ.
+          summary: Oldest outbox event has been pending for more than 5 min
+        labels:
+          severity: warning
+        isPaused: false
+        notification_settings:
+          receiver: empty
