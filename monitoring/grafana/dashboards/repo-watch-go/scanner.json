@@ -2,14 +2,14 @@
   "apiVersion": "dashboard.grafana.app/v2",
   "kind": "Dashboard",
   "metadata": {
-    "name": "adcsnv7",
+    "name": "repo-watch-go-dashboard_scanner",
     "namespace": "default",
-    "uid": "25373b82-a7c5-4e70-a083-49d059855362",
-    "resourceVersion": "1794243357959000",
+    "uid": "c7dd9530-eea8-40f5-b84c-73179e51868d",
+    "resourceVersion": "1794243291496999",
     "generation": 1,
-    "creationTimestamp": "2026-11-09T16:55:57Z",
+    "creationTimestamp": "2026-11-09T16:54:51Z",
     "labels": {
-      "grafana.app/deprecatedInternalID": "3144578852556800"
+      "grafana.app/deprecatedInternalID": "3144300086530048"
     },
     "annotations": {
       "grafana.app/createdBy": "user:eg3sqsy6cewhsc",
@@ -39,15 +39,14 @@
       }
     ],
     "cursorSync": "Off",
-    "description": "",
     "editable": true,
     "elements": {
       "panel-1": {
         "kind": "Panel",
         "spec": {
           "id": 1,
-          "title": "rabbitmq_consumer_messages_total",
-          "description": "Total messages handled by consumers, by queue and outcome.\n\n**Type:** *counter*\n\n",
+          "title": "outbox_events_published_total",
+          "description": "Total number of outbox events published successfully.\n\n**Type:** *counter*\n\n",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -64,12 +63,12 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "sum(rate(rabbitmq_consumer_messages_total{ }[$__rate_interval]))",
+                        "expr": "sum(rate(outbox_events_published_total{ }[$__rate_interval]))",
                         "fromExploreMetrics": false,
                         "legendFormat": "sum(rate)"
                       }
                     },
-                    "refId": "rabbitmq_consumer_messages_total-sum(rate)",
+                    "refId": "outbox_events_published_total-sum(rate)",
                     "hidden": false
                   }
                 }
@@ -206,7 +205,7 @@
       "hideTimepicker": false,
       "fiscalYearStartMonth": 0
     },
-    "title": "repo-watch: mailer",
+    "title": "scanner",
     "variables": [],
     "preferences": {
       "layout": {

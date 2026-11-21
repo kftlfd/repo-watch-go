@@ -2,14 +2,14 @@
   "apiVersion": "dashboard.grafana.app/v2",
   "kind": "Dashboard",
   "metadata": {
-    "name": "ad89wp5",
+    "name": "repo-watch-go-dashboard_notification",
     "namespace": "default",
-    "uid": "4f07a0f5-bbc0-4ed5-a6cd-1dd684c54c52",
-    "resourceVersion": "1794243157895994",
+    "uid": "38cee3bc-99f5-464e-aaa6-45a81a3827d5",
+    "resourceVersion": "1794243329107014",
     "generation": 1,
-    "creationTimestamp": "2026-11-09T16:52:37Z",
+    "creationTimestamp": "2026-11-09T16:55:29Z",
     "labels": {
-      "grafana.app/deprecatedInternalID": "3143739723321344"
+      "grafana.app/deprecatedInternalID": "3144457838497792"
     },
     "annotations": {
       "grafana.app/createdBy": "user:eg3sqsy6cewhsc",
@@ -39,15 +39,14 @@
       }
     ],
     "cursorSync": "Off",
-    "description": "",
     "editable": true,
     "elements": {
       "panel-1": {
         "kind": "Panel",
         "spec": {
           "id": 1,
-          "title": "http_requests_total",
-          "description": "Total number of HTTP requests.\n\n**Type:** *counter*\n\n",
+          "title": "outbox_events_published_total",
+          "description": "Total number of outbox events published successfully.\n\n**Type:** *counter*\n\n",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -64,12 +63,12 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "sum(rate(http_requests_total{ }[$__rate_interval]))",
+                        "expr": "sum(rate(outbox_events_published_total{ }[$__rate_interval]))",
                         "fromExploreMetrics": false,
                         "legendFormat": "sum(rate)"
                       }
                     },
-                    "refId": "http_requests_total-sum(rate)",
+                    "refId": "outbox_events_published_total-sum(rate)",
                     "hidden": false
                   }
                 }
@@ -206,7 +205,7 @@
       "hideTimepicker": false,
       "fiscalYearStartMonth": 0
     },
-    "title": "repo-watch: subscription",
+    "title": "notification",
     "variables": [],
     "preferences": {
       "layout": {
