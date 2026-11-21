@@ -131,15 +131,6 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		time.Minute,
 	)
 
-	dlqMonitor, err := rabbitmq.NewDLQMonitor(rabbitmq.DLQMonitorDeps{
-		Client:  rabbit,
-		Logger:  logger,
-		Metrics: rabbitMetrics,
-	})
-	if err != nil {
-		return fmt.Errorf("create dlq monitor: %w", err)
-	}
-
 	outboxDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherDeps{
 		Logger:    logger.With("module", "notification_outbox"),
 		Store:     outbox.NewScannerOutbox(queries),
@@ -166,7 +157,6 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	g.Go("outbox dispatcher", outboxDispatcher.Start)
 	g.Go("inbox", inboxWorker.Start)
 	g.Go("cleanup", cleanupJob)
-	g.Go("dlq monitor", dlqMonitor.Start)
 
 	return nil
 }

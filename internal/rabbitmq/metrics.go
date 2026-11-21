@@ -11,7 +11,6 @@ type MetricsRecorder interface {
 	RetryExhausted(queue string)
 	RetryPublishFailed(queue string)
 	MessageReturned(routingKey string)
-	SetDLQDepth(depth int)
 	SetConnected(connected bool)
 	ConnectionLost()
 }
@@ -25,7 +24,6 @@ type metrics struct {
 	retryExhausted       *prometheus.CounterVec
 	retryPublishFailures *prometheus.CounterVec
 	publishReturns       *prometheus.CounterVec
-	dlqDepth             prometheus.Gauge
 	connected            prometheus.Gauge
 	connectionLost       prometheus.Counter
 }
@@ -88,10 +86,6 @@ func NewMetrics(reg prometheus.Registerer) *metrics {
 			},
 			[]string{"routing_key"},
 		),
-		dlqDepth: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "rabbitmq_dlq_depth",
-			Help: "Current number of messages in the dead-letter queue.",
-		}),
 		connected: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "rabbitmq_connected",
 			Help: "Whether the service currently has a live RabbitMQ connection.",
@@ -111,7 +105,6 @@ func NewMetrics(reg prometheus.Registerer) *metrics {
 		m.retryExhausted,
 		m.retryPublishFailures,
 		m.publishReturns,
-		m.dlqDepth,
 		m.connected,
 		m.connectionLost,
 	)
@@ -151,10 +144,6 @@ func (m *metrics) MessageReturned(routingKey string) {
 	m.publishReturns.WithLabelValues(routingKey).Inc()
 }
 
-func (m *metrics) SetDLQDepth(depth int) {
-	m.dlqDepth.Set(float64(depth))
-}
-
 func (m *metrics) SetConnected(connected bool) {
 	if connected {
 		m.connected.Set(1)
@@ -178,6 +167,5 @@ func (noopMetrics) RetryScheduled(string, string)  {}
 func (noopMetrics) RetryExhausted(string)          {}
 func (noopMetrics) RetryPublishFailed(string)      {}
 func (noopMetrics) MessageReturned(string)         {}
-func (noopMetrics) SetDLQDepth(int)                {}
 func (noopMetrics) SetConnected(bool)              {}
 func (noopMetrics) ConnectionLost()                {}
