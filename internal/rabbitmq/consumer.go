@@ -2,7 +2,6 @@ package rabbitmq
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -260,23 +259,6 @@ func isFatalConsumeError(err error) bool {
 	return false
 }
 
-func retryCountFromHeaders(headers amqp091.Table) int32 {
-	switch n := headers[retryCountHeader].(type) {
-	case int8:
-		return int32(n)
-	case int16:
-		return int32(n)
-	case int32:
-		return n
-	case int64:
-		return int32(n)
-	case int:
-		return int32(n)
-	default:
-		return 0
-	}
-}
-
 func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 	logArgs := []any{
 		slog.String("queue", s.queueName),
@@ -295,13 +277,9 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 		invalidAck bool
 	}
 
-	err = json.Unmarshal(delivery.Body, &msg)
+	msg, err = events.DecodeEnvelope(delivery.Body)
 	if err != nil {
 		ack = NackDiscard
-		err = fmt.Errorf("invalid json envelope: %w", err)
-	} else if msg.EventID == "" {
-		ack = NackDiscard
-		err = fmt.Errorf("missing event id")
 	} else {
 		handlerCtx, cancel := context.WithTimeout(s.ctx, s.cfg.HandlerTimeout)
 		ack, err = s.handler(handlerCtx, msg)
@@ -341,7 +319,7 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 			break
 		}
 
-		attempt := retryCountFromHeaders(delivery.Headers) + 1
+		attempt := Int32Header(delivery.Headers, RetryCountHeader) + 1
 		if attempt > s.retryLimit() {
 			level = slog.LevelError
 			s.metrics.RetryExhausted(s.queueName)

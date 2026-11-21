@@ -10,12 +10,16 @@ import (
 )
 
 const (
-	exchangeDeadLetter = "repo-watch.dlx"
+	ExchangeDeadLetter = "repo-watch.dlx"
 	ExchangeTopic      = "repo-watch.topic"
 
 	alternateExchangeArg = "alternate-exchange"
 
-	queueDeadLetter        = "repo-watch.dlq"
+	// Discarded or unroutable messages
+	QueueDeadLetter = "repo-watch.dlq"
+	// Messages that ended up in DLQ but cannot be safely replayed automatically
+	QueueDLQQuarantine = "repo-watch.dlq.quarantine"
+
 	QueueSubscriptionInbox = "repo-watch.subscription.inbox"
 	QueueScannerInbox      = "repo-watch.scanner.inbox"
 	QueueNotificationInbox = "repo-watch.notification.inbox"
@@ -23,16 +27,15 @@ const (
 
 	inboxDeliveryLimit = 10
 
-	// retryCountHeader carries the number of delayed retries already
-	// scheduled for an inbox message. It survives the retry queue TTL and is
-	// authoritative for choosing the next backoff tier and the retry limit.
-	retryCountHeader = "x-retry-count"
+	// Carries number of delayed retries already scheduled, used for choosing the
+	// next backoff tier and the retry limit.
+	RetryCountHeader = "x-retry-count"
 
-	// DLQMessageTTL is how long dead letters are kept for investigation.
-	// The TTL is applied when the queue is first declared; changing it requires
-	// deleting and redeclaring the queue (or using a RabbitMQ policy instead).
+	// Carries number of automatic replays for messages in DLQ
+	ReplayCountHeader = "x-replay-count"
+
 	DLQMessageTTL = 30 * 24 * time.Hour
-	dlqMaxLength  = 10_000
+	DLQMaxLength  = 10_000
 )
 
 // retryTier is one delayed retry queue for an inbox.
@@ -79,8 +82,9 @@ func retryTierFor(attempt int32) retryTier {
 
 func dlqQueueArgs() amqp091.Table {
 	return amqp091.Table{
+		"x-queue-type":  amqp091.QueueTypeQuorum,
 		"x-message-ttl": int64(DLQMessageTTL / time.Millisecond),
-		"x-max-length":  int64(dlqMaxLength),
+		"x-max-length":  int64(DLQMaxLength),
 		"x-overflow":    "drop-head",
 	}
 }
@@ -88,9 +92,34 @@ func dlqQueueArgs() amqp091.Table {
 func inboxQueueArgs() amqp091.Table {
 	return amqp091.Table{
 		"x-queue-type":           amqp091.QueueTypeQuorum,
-		"x-dead-letter-exchange": exchangeDeadLetter,
+		"x-dead-letter-exchange": ExchangeDeadLetter,
 		"x-delivery-limit":       int32(inboxDeliveryLimit),
 	}
+}
+
+func dlqQuarantineQueueArgs() amqp091.Table {
+	return amqp091.Table{
+		"x-queue-type": amqp091.QueueTypeQuorum,
+	}
+}
+
+func DeclareQuarantineQueue(ch *amqp091.Channel, queue string) error {
+	if queue == "" {
+		return fmt.Errorf("missing quarantine queue name")
+	}
+
+	_, err := ch.QueueDeclare(
+		queue,
+		true,  // durable
+		false, // auto-delete
+		false, // exclusive
+		false, // no-wait
+		dlqQuarantineQueueArgs(),
+	)
+	if err != nil {
+		return fmt.Errorf("declare quarantine queue %q: %w", queue, err)
+	}
+	return nil
 }
 
 var inboxQueuesDef = []struct {
@@ -126,7 +155,7 @@ func EnsureTopology(conn *amqp091.Connection) error {
 	// topic exchange, so messages that cannot be routed to any inbox queue
 	// are retained in the DLQ instead of being returned and dropped.
 	if err = ch.ExchangeDeclare(
-		exchangeDeadLetter,
+		ExchangeDeadLetter,
 		amqp091.ExchangeFanout,
 		true,  // durable
 		false, // auto-delete
@@ -138,7 +167,7 @@ func EnsureTopology(conn *amqp091.Connection) error {
 	}
 
 	if _, err = ch.QueueDeclare(
-		queueDeadLetter,
+		QueueDeadLetter,
 		true,  // durable
 		false, // auto-delete
 		false, // exclusive
@@ -149,9 +178,9 @@ func EnsureTopology(conn *amqp091.Connection) error {
 	}
 
 	if err = ch.QueueBind(
-		queueDeadLetter,
+		QueueDeadLetter,
 		"",
-		exchangeDeadLetter,
+		ExchangeDeadLetter,
 		false, // no-wait
 		nil,
 	); err != nil {
@@ -166,7 +195,7 @@ func EnsureTopology(conn *amqp091.Connection) error {
 		false, // internal
 		false, // no-wait
 		amqp091.Table{
-			alternateExchangeArg: exchangeDeadLetter,
+			alternateExchangeArg: ExchangeDeadLetter,
 		},
 	); err != nil {
 		return fmt.Errorf("declare topic exchange: %w", err)
