@@ -19,8 +19,8 @@ const (
 	defaultLeaseDuration        = 5 * time.Second
 	defaultLoopInterval         = 5 * time.Second
 	defaultLoopIterationTimeout = 3 * time.Second
-	defaultRetryBaseBackoff     = 250 * time.Millisecond
-	defaultRetryMaxBackoff      = 5 * time.Second
+	defaultRetryBaseBackoff     = 1 * time.Second
+	defaultRetryMaxBackoff      = 60 * time.Second
 
 	storeTimeout = 5 * time.Second
 )
@@ -62,12 +62,16 @@ type FailedStats struct {
 type Store interface {
 	GetNextBatch(ctx context.Context, batchSize int32, leaseUntil time.Time) ([]Row, error)
 	MarkPublished(ctx context.Context, ids []int32) error
+	// RecordFailure increments attempts and, for nonterminal failures,
+	// stores nextAttemptAt as the earliest time the row may be retried.
+	// nextAttemptAt is ignored for terminal failures.
 	RecordFailure(
 		ctx context.Context,
 		id int32,
 		lastError string,
 		terminal bool,
 		maxAttempts int32,
+		nextAttemptAt time.Time,
 	) (Failure, error)
 	PendingStats(ctx context.Context) (PendingStats, error)
 	FailedStats(ctx context.Context) (FailedStats, error)
@@ -268,7 +272,7 @@ func (d *Dispatcher) runIteration(ctx context.Context) (processed int, err error
 
 	for _, row := range batch {
 		if row.InvalidReason != "" {
-			failure, failureErr := d.recordFailure(ctx, row, row.InvalidReason, true)
+			failure, failureErr := d.recordFailure(ctx, row, row.InvalidReason, true, time.Time{})
 			if failureErr != nil {
 				errs = append(errs, failureErr)
 				break
@@ -279,7 +283,7 @@ func (d *Dispatcher) runIteration(ctx context.Context) (processed int, err error
 			continue
 		}
 
-		published, terminal, publishErr := d.publishWithRetry(ctx, leaseDeadline, row)
+		published, terminal, publishErr := d.publishRow(ctx, leaseDeadline, row)
 		if published {
 			publishedIDs = append(publishedIDs, row.ID)
 			processed++
@@ -345,79 +349,63 @@ func (d *Dispatcher) recordStats(ctx context.Context) {
 	d.metrics.SetOldestFailedAge(failedAge)
 }
 
-func (d *Dispatcher) publishWithRetry(
+func (d *Dispatcher) publishRow(
 	ctx context.Context,
 	leaseDeadline time.Time,
 	row Row,
 ) (published bool, terminal bool, err error) {
-	var lastErr error
+	// Detach from shutdown cancellation so an in-flight publisher confirm
+	// can finish; the lease deadline keeps the wait bounded.
+	publishCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), leaseDeadline)
+	err = d.pub.PublishJSON(publishCtx, events.Envelope{
+		EventID:   row.EventID,
+		EventType: row.EventType,
+		Version:   row.Version,
+		CreatedAt: row.CreatedAt,
+		Payload:   row.Payload,
+	})
+	cancel()
 
-	for {
-		if ctx.Err() != nil {
-			return false, false, ctx.Err()
-		}
-		if !d.now().Before(leaseDeadline) {
-			return false, false, fmt.Errorf(
-				"outbox row %d: lease expired before publish: %w", row.ID, lastErr)
-		}
-
-		// Detach from shutdown cancellation so an in-flight publisher confirm
-		// can finish; the lease deadline keeps the wait bounded.
-		publishCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), leaseDeadline)
-		err = d.pub.PublishJSON(publishCtx, events.Envelope{
-			EventID:   row.EventID,
-			EventType: row.EventType,
-			Version:   row.Version,
-			CreatedAt: row.CreatedAt,
-			Payload:   row.Payload,
-		})
-		cancel()
-
-		if err == nil {
-			return true, false, nil
-		}
-
-		lastErr = err
-
-		if ctx.Err() != nil {
-			return false, false, ctx.Err()
-		}
-
-		if errors.Is(err, rabbitmq.ErrClosed) || errors.Is(err, rabbitmq.ErrUnavailable) {
-			return false, false, err
-		}
-
-		isTerminal := false
-		if errors.Is(err, rabbitmq.ErrInvalid) {
-			isTerminal = true
-		}
-
-		failure, recordErr := d.recordFailure(ctx, row, err.Error(), isTerminal)
-		if recordErr != nil {
-			return false, false, fmt.Errorf("record event failure %q: %w", row.EventID, recordErr)
-		}
-		if failure.Terminal {
-			return false, true, fmt.Errorf("event %q exceeded %d attempts: %w", row.EventID, d.cfg.maxAttempts, err)
-		}
-
-		d.logger.Error(
-			"outbox publish failed; retrying",
-			"outbox_id", row.ID,
-			"event_type", row.EventType,
-			"attempt", failure.Attempts,
-			"error", err,
-		)
-		d.metrics.Retry()
-
-		delay := d.retryDelay(failure.Attempts)
-		if d.now().Add(delay).After(leaseDeadline) {
-			return false, false, fmt.Errorf(
-				"outbox row %d: lease expires before retry: %w", row.ID, err)
-		}
-		if err := d.sleep(ctx, delay); err != nil {
-			return false, false, err
-		}
+	if err == nil {
+		return true, false, nil
 	}
+
+	if ctx.Err() != nil {
+		return false, false, ctx.Err()
+	}
+
+	if errors.Is(err, rabbitmq.ErrClosed) || errors.Is(err, rabbitmq.ErrUnavailable) {
+		return false, false, err
+	}
+
+	isTerminal := errors.Is(err, rabbitmq.ErrInvalid)
+
+	var nextAttemptAt time.Time
+	if !isTerminal && row.Attempts+1 < d.cfg.maxAttempts {
+		nextAttemptAt = d.now().Add(d.retryDelay(row.Attempts + 1))
+	}
+
+	failure, recordErr := d.recordFailure(ctx, row, err.Error(), isTerminal, nextAttemptAt)
+	if recordErr != nil {
+		return false, false, fmt.Errorf("record event failure %q: %w", row.EventID, recordErr)
+	}
+	if failure.Terminal {
+		return false, true, fmt.Errorf("event %q exceeded %d attempts: %w", row.EventID, d.cfg.maxAttempts, err)
+	}
+
+	d.logger.Error(
+		"outbox publish failed; retry scheduled",
+		"outbox_id", row.ID,
+		"event_type", row.EventType,
+		"attempt", failure.Attempts,
+		"next_attempt_at", nextAttemptAt,
+		"error", err,
+	)
+	d.metrics.Retry()
+
+	// The row is durably scheduled. It is not an iteration failure; a later
+	// dispatch will pick it up when next_attempt_at is due.
+	return false, false, nil
 }
 
 func (d *Dispatcher) recordFailure(
@@ -425,6 +413,7 @@ func (d *Dispatcher) recordFailure(
 	row Row,
 	reason string,
 	terminal bool,
+	nextAttemptAt time.Time,
 ) (Failure, error) {
 	storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
 	defer cancel()
@@ -435,6 +424,7 @@ func (d *Dispatcher) recordFailure(
 		reason,
 		terminal,
 		d.cfg.maxAttempts,
+		nextAttemptAt,
 	)
 	if err != nil {
 		return Failure{}, fmt.Errorf("record failure for outbox row %d: %w", row.ID, err)

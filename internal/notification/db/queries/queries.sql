@@ -27,8 +27,9 @@ WITH candidates AS (
     FROM outbox
     WHERE published_at IS NULL
         AND failed_at IS NULL
+        AND (next_attempt_at IS NULL OR next_attempt_at <= now())
         AND (leased_until IS NULL OR leased_until < now())
-    ORDER BY id ASC
+    ORDER BY next_attempt_at ASC NULLS FIRST, id ASC
     LIMIT $1
     FOR UPDATE SKIP LOCKED
 )
@@ -41,7 +42,8 @@ RETURNING outbox.*;
 -- name: MarkOutboxPublished :exec
 UPDATE outbox
 SET published_at = now(),
-    leased_until = NULL
+    leased_until = NULL,
+    next_attempt_at = NULL
 WHERE id = ANY(@ids::int[])
     AND published_at IS NULL;
 
@@ -55,15 +57,16 @@ SET
         THEN now()
         ELSE NULL
     END,
-    leased_until = CASE
+    next_attempt_at = CASE
         WHEN @terminal::boolean OR attempts + 1 >= @max_attempts
         THEN NULL
-        ELSE leased_until
-    END
+        ELSE @next_attempt_at::timestamptz
+    END,
+    leased_until = NULL
 WHERE id = @id
     AND published_at IS NULL
     AND failed_at IS NULL
-RETURNING attempts, failed_at;
+RETURNING attempts, failed_at, next_attempt_at;
 
 -- name: DeactivateSubsForRepoAndNotifySubs :exec
 WITH subs AS (

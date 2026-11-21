@@ -16,7 +16,7 @@ import (
 func TestHandlerDiscardsInvalidPayload(t *testing.T) {
 	w := &inboxWorker{}
 
-	ack, err := w.handler(events.Envelope{
+	ack, err := w.handler(t.Context(), events.Envelope{
 		EventType: events.EventRepositoryChanged,
 		Payload:   json.RawMessage(`not-json`),
 	})
@@ -30,9 +30,12 @@ func TestHandlerRequeuesTransientDatabaseFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	w := &inboxWorker{q: dbGen.New(db)}
+	w := &inboxWorker{
+		db: db,
+		q:  dbGen.New(db),
+	}
 
-	ack, err := w.handler(events.Envelope{
+	ack, err := w.handler(t.Context(), events.Envelope{
 		EventType: events.EventRepositoryChanged,
 		Payload: json.RawMessage(`{
 			"repository_id": "owner/repo",

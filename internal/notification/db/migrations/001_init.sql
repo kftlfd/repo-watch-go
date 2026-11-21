@@ -15,6 +15,14 @@ CREATE INDEX subscriptions_active_repository_idx ON subscriptions (repository_id
 WHERE
     active = true;
 
+CREATE TABLE processed_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX processed_events_processed_at_idx ON processed_events (processed_at);
+
 CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
     type TEXT NOT NULL,
@@ -25,6 +33,7 @@ CREATE TABLE outbox (
     payload JSONB NOT NULL,    
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     leased_until TIMESTAMPTZ,
+    next_attempt_at TIMESTAMPTZ,
     published_at TIMESTAMPTZ,
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT '',
@@ -39,7 +48,7 @@ CREATE INDEX outbox_failed_at_idx ON outbox (failed_at)
 WHERE
     failed_at IS NOT NULL;
 
-CREATE INDEX outbox_retryable_idx ON outbox (id)
+CREATE INDEX outbox_retryable_idx ON outbox (next_attempt_at ASC NULLS FIRST, id)
 WHERE
     published_at IS NULL
     AND failed_at IS NULL;
@@ -58,6 +67,10 @@ DROP INDEX IF EXISTS outbox_dedupe_idx;
 DROP INDEX IF EXISTS outbox_retryable_idx;
 
 DROP TABLE IF EXISTS outbox;
+
+DROP INDEX IF EXISTS processed_events_processed_at_idx;
+
+DROP TABLE IF EXISTS processed_events;
 
 DROP INDEX IF EXISTS subscriptions_active_repository_idx;
 

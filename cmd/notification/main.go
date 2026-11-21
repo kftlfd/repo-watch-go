@@ -95,14 +95,19 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	}
 	g.Cleanup(func() { _ = rabbit.Close() })
 
-	rabbitConsumer, err := rabbitmq.NewConsumer(rabbit, logger, rabbitMetrics)
-	if err != nil {
-		return fmt.Errorf("create rabbit consumer: %w", err)
-	}
-
 	rabbitPublisher, err := rabbitmq.NewPublisher(rabbit, logger, rabbitMetrics)
 	if err != nil {
 		return fmt.Errorf("create rabbit publisher: %w", err)
+	}
+
+	rabbitConsumer, err := rabbitmq.NewConsumer(
+		rabbit,
+		logger,
+		rabbitMetrics,
+		rabbitmq.WithRetryPublisher(rabbitPublisher),
+	)
+	if err != nil {
+		return fmt.Errorf("create rabbit consumer: %w", err)
 	}
 
 	logger.Info("initiating components")
@@ -112,6 +117,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	inboxWorker, err := inbox.NewInboxWorker(inbox.Deps{
 		Logger:         logger,
 		RabbitConsumer: rabbitConsumer,
+		DB:             db,
 		Queries:        queries,
 	})
 	if err != nil {
@@ -124,15 +130,6 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		time.Hour,
 		time.Minute,
 	)
-
-	dlqMonitor, err := rabbitmq.NewDLQMonitor(rabbitmq.DLQMonitorDeps{
-		Client:  rabbit,
-		Logger:  logger,
-		Metrics: rabbitMetrics,
-	})
-	if err != nil {
-		return fmt.Errorf("create dlq monitor: %w", err)
-	}
 
 	outboxDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherDeps{
 		Logger:    logger.With("module", "notification_outbox"),
@@ -160,7 +157,6 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	g.Go("outbox dispatcher", outboxDispatcher.Start)
 	g.Go("inbox", inboxWorker.Start)
 	g.Go("cleanup", cleanupJob)
-	g.Go("dlq monitor", dlqMonitor.Start)
 
 	return nil
 }

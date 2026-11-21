@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/db/dbGen"
 	"repo-watch/internal/subscription/subs"
 	"repo-watch/internal/taskrunner"
@@ -11,9 +12,10 @@ import (
 
 const (
 	tokenRetention              = subs.ConfirmTokenValidity
-	publishedOutboxRetention    = time.Hour * 24 * 14
+	publishedOutboxRetention    = 2 * rabbitmq.DLQMessageTTL
 	failedOutboxRetention       = time.Hour * 24 * 30
 	orphanedUnsubTokenRetention = time.Hour * 24
+	processedEventsRetention    = 2 * rabbitmq.DLQMessageTTL
 )
 
 func CreateCleanupTasks(queries *dbGen.Queries, now func() time.Time) []taskrunner.Task {
@@ -43,6 +45,13 @@ func CreateCleanupTasks(queries *dbGen.Queries, now func() time.Time) []taskrunn
 			Name: "cleanup orphaned unsub tokens",
 			Do: func(ctx context.Context) error {
 				_, err := queries.DeleteOrphanedUnsubTokens(ctx, now().Add(-orphanedUnsubTokenRetention))
+				return err
+			},
+		},
+		{
+			Name: "cleanup processed events",
+			Do: func(ctx context.Context) error {
+				_, err := queries.DeleteProcessedEvents(ctx, now().Add(-processedEventsRetention))
 				return err
 			},
 		},

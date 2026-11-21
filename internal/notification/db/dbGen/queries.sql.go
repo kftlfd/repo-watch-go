@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -103,8 +104,9 @@ WITH candidates AS (
     FROM outbox
     WHERE published_at IS NULL
         AND failed_at IS NULL
+        AND (next_attempt_at IS NULL OR next_attempt_at <= now())
         AND (leased_until IS NULL OR leased_until < now())
-    ORDER BY id ASC
+    ORDER BY next_attempt_at ASC NULLS FIRST, id ASC
     LIMIT $1
     FOR UPDATE SKIP LOCKED
 )
@@ -112,7 +114,7 @@ UPDATE outbox
 SET leased_until = $2
 FROM candidates
 WHERE outbox.id = candidates.id
-RETURNING outbox.id, outbox.type, outbox.email, outbox.repository_id, outbox.tag, outbox.unsub_token, outbox.payload, outbox.created_at, outbox.leased_until, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
+RETURNING outbox.id, outbox.type, outbox.email, outbox.repository_id, outbox.tag, outbox.unsub_token, outbox.payload, outbox.created_at, outbox.leased_until, outbox.next_attempt_at, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
 `
 
 type GetNotificationsBatchParams struct {
@@ -139,6 +141,7 @@ func (q *Queries) GetNotificationsBatch(ctx context.Context, arg GetNotification
 			&i.Payload,
 			&i.CreatedAt,
 			&i.LeasedUntil,
+			&i.NextAttemptAt,
 			&i.PublishedAt,
 			&i.Attempts,
 			&i.LastError,
@@ -160,7 +163,8 @@ func (q *Queries) GetNotificationsBatch(ctx context.Context, arg GetNotification
 const markOutboxPublished = `-- name: MarkOutboxPublished :exec
 UPDATE outbox
 SET published_at = now(),
-    leased_until = NULL
+    leased_until = NULL,
+    next_attempt_at = NULL
 WHERE id = ANY($1::int[])
     AND published_at IS NULL
 `
@@ -180,27 +184,30 @@ SET
         THEN now()
         ELSE NULL
     END,
-    leased_until = CASE
+    next_attempt_at = CASE
         WHEN $2::boolean OR attempts + 1 >= $3
         THEN NULL
-        ELSE leased_until
-    END
-WHERE id = $4
+        ELSE $4::timestamptz
+    END,
+    leased_until = NULL
+WHERE id = $5
     AND published_at IS NULL
     AND failed_at IS NULL
-RETURNING attempts, failed_at
+RETURNING attempts, failed_at, next_attempt_at
 `
 
 type RecordOutboxFailureParams struct {
-	LastError   string
-	Terminal    bool
-	MaxAttempts int32
-	ID          int32
+	LastError     string
+	Terminal      bool
+	MaxAttempts   int32
+	NextAttemptAt time.Time
+	ID            int32
 }
 
 type RecordOutboxFailureRow struct {
-	Attempts int32
-	FailedAt sql.NullTime
+	Attempts      int32
+	FailedAt      sql.NullTime
+	NextAttemptAt sql.NullTime
 }
 
 func (q *Queries) RecordOutboxFailure(ctx context.Context, arg RecordOutboxFailureParams) (RecordOutboxFailureRow, error) {
@@ -208,9 +215,10 @@ func (q *Queries) RecordOutboxFailure(ctx context.Context, arg RecordOutboxFailu
 		arg.LastError,
 		arg.Terminal,
 		arg.MaxAttempts,
+		arg.NextAttemptAt,
 		arg.ID,
 	)
 	var i RecordOutboxFailureRow
-	err := row.Scan(&i.Attempts, &i.FailedAt)
+	err := row.Scan(&i.Attempts, &i.FailedAt, &i.NextAttemptAt)
 	return i, err
 }

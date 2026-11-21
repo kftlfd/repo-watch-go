@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/rabbitmq/amqp091-go"
 
@@ -9,26 +10,116 @@ import (
 )
 
 const (
-	exchangeDeadLetter = "repo-watch.dlx"
+	ExchangeDeadLetter = "repo-watch.dlx"
 	ExchangeTopic      = "repo-watch.topic"
 
 	alternateExchangeArg = "alternate-exchange"
 
-	queueDeadLetter        = "repo-watch.dlq"
+	// Discarded or unroutable messages
+	QueueDeadLetter = "repo-watch.dlq"
+	// Messages that ended up in DLQ but cannot be safely replayed automatically
+	QueueDLQQuarantine = "repo-watch.dlq.quarantine"
+
 	QueueSubscriptionInbox = "repo-watch.subscription.inbox"
 	QueueScannerInbox      = "repo-watch.scanner.inbox"
 	QueueNotificationInbox = "repo-watch.notification.inbox"
 	QueueMailerInbox       = "repo-watch.mailer.inbox"
 
 	inboxDeliveryLimit = 10
+
+	// Carries number of delayed retries already scheduled, used for choosing the
+	// next backoff tier and the retry limit.
+	RetryCountHeader = "x-retry-count"
+
+	// Carries number of automatic replays for messages in DLQ
+	ReplayCountHeader = "x-replay-count"
+
+	DLQMessageTTL = 30 * 24 * time.Hour
+	DLQMaxLength  = 10_000
 )
+
+// retryTier is one delayed retry queue for an inbox.
+type retryTier struct {
+	Name  string
+	Delay time.Duration
+}
+
+// retryTiers defines the backoff schedule for failed inbox deliveries. The
+// first failure is retried after the first tier, the second failure after the
+// second tier, and every later failure keeps using the last tier until the
+// retry limit is exhausted.
+//
+// To add another retry step:
+//  1. Add an entry below with a new, stable Name and the desired Delay.
+//  2. Restart the services. EnsureTopology declares a queue for every tier of
+//     every inbox, so no other wiring is needed.
+//  3. Do not change the Delay or Name of an existing tier. RabbitMQ rejects a
+//     redeclare with different queue arguments (PRECONDITION_FAILED). To change
+//     a delay, add a new tier and delete the old queue after it has drained.
+var retryTiers = []retryTier{
+	{Name: "30s", Delay: 30 * time.Second},
+	{Name: "10m", Delay: 10 * time.Minute},
+}
+
+func retryQueueName(inbox string, tier retryTier) string {
+	return fmt.Sprintf("%s.retry.%s", inbox, tier.Name)
+}
+
+func retryQueueArgs(tier retryTier, inbox string) amqp091.Table {
+	return amqp091.Table{
+		"x-queue-type":              amqp091.QueueTypeQuorum,
+		"x-message-ttl":             int64(tier.Delay / time.Millisecond),
+		"x-dead-letter-exchange":    "",
+		"x-dead-letter-routing-key": inbox,
+	}
+}
+
+func retryTierFor(attempt int32) retryTier {
+	idx := max(int(attempt)-1, 0)
+	idx = min(idx, len(retryTiers)-1)
+	return retryTiers[idx]
+}
+
+func dlqQueueArgs() amqp091.Table {
+	return amqp091.Table{
+		"x-queue-type":  amqp091.QueueTypeQuorum,
+		"x-message-ttl": int64(DLQMessageTTL / time.Millisecond),
+		"x-max-length":  int64(DLQMaxLength),
+		"x-overflow":    "drop-head",
+	}
+}
 
 func inboxQueueArgs() amqp091.Table {
 	return amqp091.Table{
 		"x-queue-type":           amqp091.QueueTypeQuorum,
-		"x-dead-letter-exchange": exchangeDeadLetter,
+		"x-dead-letter-exchange": ExchangeDeadLetter,
 		"x-delivery-limit":       int32(inboxDeliveryLimit),
 	}
+}
+
+func dlqQuarantineQueueArgs() amqp091.Table {
+	return amqp091.Table{
+		"x-queue-type": amqp091.QueueTypeQuorum,
+	}
+}
+
+func DeclareQuarantineQueue(ch *amqp091.Channel, queue string) error {
+	if queue == "" {
+		return fmt.Errorf("missing quarantine queue name")
+	}
+
+	_, err := ch.QueueDeclare(
+		queue,
+		true,  // durable
+		false, // auto-delete
+		false, // exclusive
+		false, // no-wait
+		dlqQuarantineQueueArgs(),
+	)
+	if err != nil {
+		return fmt.Errorf("declare quarantine queue %q: %w", queue, err)
+	}
+	return nil
 }
 
 var inboxQueuesDef = []struct {
@@ -64,7 +155,7 @@ func EnsureTopology(conn *amqp091.Connection) error {
 	// topic exchange, so messages that cannot be routed to any inbox queue
 	// are retained in the DLQ instead of being returned and dropped.
 	if err = ch.ExchangeDeclare(
-		exchangeDeadLetter,
+		ExchangeDeadLetter,
 		amqp091.ExchangeFanout,
 		true,  // durable
 		false, // auto-delete
@@ -76,20 +167,20 @@ func EnsureTopology(conn *amqp091.Connection) error {
 	}
 
 	if _, err = ch.QueueDeclare(
-		queueDeadLetter,
+		QueueDeadLetter,
 		true,  // durable
 		false, // auto-delete
 		false, // exclusive
 		false, // no-wait
-		nil,
+		dlqQueueArgs(),
 	); err != nil {
 		return fmt.Errorf("declare DLQ: %w", err)
 	}
 
 	if err = ch.QueueBind(
-		queueDeadLetter,
+		QueueDeadLetter,
 		"",
-		exchangeDeadLetter,
+		ExchangeDeadLetter,
 		false, // no-wait
 		nil,
 	); err != nil {
@@ -104,7 +195,7 @@ func EnsureTopology(conn *amqp091.Connection) error {
 		false, // internal
 		false, // no-wait
 		amqp091.Table{
-			alternateExchangeArg: exchangeDeadLetter,
+			alternateExchangeArg: ExchangeDeadLetter,
 		},
 	); err != nil {
 		return fmt.Errorf("declare topic exchange: %w", err)
@@ -131,6 +222,24 @@ func EnsureTopology(conn *amqp091.Connection) error {
 				nil,
 			); err != nil {
 				return fmt.Errorf("bind queue %q to exchange %q with key %q: %w", qDef.name, ExchangeTopic, bKey, err)
+			}
+		}
+
+		// Retry queues are not bound to the topic exchange. The consumer
+		// publishes to them through the default exchange, and after the
+		// queue-level TTL expires they dead-letter straight back into the
+		// inbox queue.
+		for _, tier := range retryTiers {
+			retryName := retryQueueName(qDef.name, tier)
+			if _, err = ch.QueueDeclare(
+				retryName,
+				true,  // durable
+				false, // auto-delete
+				false, // exclusive
+				false, // no-wait
+				retryQueueArgs(tier, qDef.name),
+			); err != nil {
+				return fmt.Errorf("declare retry queue %q: %w", retryName, err)
 			}
 		}
 	}

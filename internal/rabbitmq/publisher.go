@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 
 	"github.com/rabbitmq/amqp091-go"
@@ -24,8 +25,8 @@ type publisher struct {
 	logger  *slog.Logger
 	metrics MetricsRecorder
 
-	mu sync.Mutex
-	ch *amqp091.Channel
+	mu   sync.Mutex
+	publ *ConfirmedPublisher
 
 	done chan struct{}
 }
@@ -81,53 +82,101 @@ func (p *publisher) PublishJSON(
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	ch, err := p.getChannelLocked()
+	publ, err := p.getPubLocked()
 	if err != nil {
 		return err
 	}
 
-	confirmation, err := ch.PublishWithDeferredConfirmWithContext(
-		ctx,
-		ExchangeTopic,
-		routingKey,
-		true,  // mandatory
-		false, // immediate
-		publishing,
-	)
+	err = publ.Publish(ctx, ExchangeTopic, routingKey, publishing)
+	if err == nil {
+		return nil
+	}
+
+	p.recordPublishError(err)
+
+	// A failed publish may leave a return queued or the channel in an unknown
+	// state. Recreate the shared channel on the next attempt instead of
+	// risking a stale return being attributed to a later message.
+	if _, ok := errors.AsType[*ReturnedError](err); !ok {
+		publ.Close()
+		p.publ = nil
+	}
+
+	return err
+}
+
+// PublishRetry copies a failed delivery into a delayed retry queue. It uses
+// a dedicated channel so the return check cannot race with unrelated
+// publishes on the shared channel. The caller must not ack the original
+// delivery unless this returns nil.
+func (p *publisher) PublishRetry(
+	ctx context.Context,
+	queue string,
+	d amqp091.Delivery,
+	attempt int32,
+) error {
+	if queue == "" {
+		return fmt.Errorf("%w: missing retry queue", ErrInvalid)
+	}
+
+	conn, err := p.client.acquire()
 	if err != nil {
 		return err
 	}
-	if confirmation == nil {
-		return errors.New("publish confirmation was not created")
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return fmt.Errorf("create retry publisher channel: %w", err)
 	}
 
-	ack, err := confirmation.WaitContext(ctx)
+	publ, err := NewConfirmedPublisher(ch)
 	if err != nil {
+		closeChannel(ch)
 		return err
 	}
-	if !ack {
-		return errors.New("publisher nack")
+	defer publ.Close()
+
+	headers := amqp091.Table{}
+	maps.Copy(headers, d.Headers)
+	headers[RetryCountHeader] = attempt
+
+	msg := amqp091.Publishing{
+		ContentType:     d.ContentType,
+		ContentEncoding: d.ContentEncoding,
+		DeliveryMode:    d.DeliveryMode,
+		Priority:        d.Priority,
+		CorrelationId:   d.CorrelationId,
+		ReplyTo:         d.ReplyTo,
+		MessageId:       d.MessageId,
+		Timestamp:       d.Timestamp,
+		Type:            d.Type,
+		UserId:          d.UserId,
+		AppId:           d.AppId,
+		Headers:         headers,
+		Body:            d.Body,
 	}
 
+	if err := publ.Publish(ctx, "", queue, msg); err != nil {
+		p.recordPublishError(err)
+		return fmt.Errorf("publish retry to %q: %w", queue, err)
+	}
 	return nil
 }
 
-// getChannelLocked returns the current open channel, or tries to create
-// a new one
-func (p *publisher) getChannelLocked() (*amqp091.Channel, error) {
+func (p *publisher) getPubLocked() (*ConfirmedPublisher, error) {
 	select {
 	case <-p.done:
 		return nil, ErrClosed
 	default:
 	}
 
-	if p.ch != nil && !p.ch.IsClosed() {
-		return p.ch, nil
+	if p.publ != nil && p.publ.Active() {
+		return p.publ, nil
 	}
 
-	if p.ch != nil {
-		closeChannel(p.ch)
-		p.ch = nil
+	if p.publ != nil {
+		p.publ.Close()
+		p.publ = nil
 	}
 
 	conn, err := p.client.acquire()
@@ -143,22 +192,19 @@ func (p *publisher) getChannelLocked() (*amqp091.Channel, error) {
 		return nil, fmt.Errorf("create publisher channel: %w", err)
 	}
 
-	if err := ch.Confirm(false); err != nil {
+	publ, err := NewConfirmedPublisher(ch)
+	if err != nil {
 		closeChannel(ch)
-		return nil, fmt.Errorf("enable publisher confirms: %w", err)
+		return nil, err
 	}
 
-	returns := make(chan amqp091.Return, 1)
-	ch.NotifyReturn(returns)
-	go p.observeReturns(returns)
-
-	p.ch = ch
-	return ch, nil
+	p.publ = publ
+	return publ, nil
 }
 
-func (p *publisher) observeReturns(returns <-chan amqp091.Return) {
-	for ret := range returns {
-		p.metrics.MessageReturned(ret.RoutingKey)
-		p.logger.Error("rabbitmq message returned", "msg", ret)
+func (p *publisher) recordPublishError(err error) {
+	if returned, ok := errors.AsType[*ReturnedError](err); ok {
+		p.metrics.MessageReturned(returned.Return.RoutingKey)
+		p.logger.Error("rabbitmq message returned", "msg", returned.Return)
 	}
 }

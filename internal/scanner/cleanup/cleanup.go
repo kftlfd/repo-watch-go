@@ -4,14 +4,16 @@ import (
 	"context"
 	"time"
 
+	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/db/dbGen"
 	"repo-watch/internal/taskrunner"
 )
 
 const (
-	publishedOutboxRetention = time.Hour * 24 * 14
+	publishedOutboxRetention = 2 * rabbitmq.DLQMessageTTL
 	failedOutboxRetention    = time.Hour * 24 * 30
 	oldReleasesRetention     = time.Hour * 24 * 90
+	processedEventsRetention = 2 * rabbitmq.DLQMessageTTL
 )
 
 func CreateCleanupTasks(
@@ -37,6 +39,13 @@ func CreateCleanupTasks(
 			Name: "releases",
 			Do: func(ctx context.Context) error {
 				_, err := queries.DeleteOldReleases(ctx, now().Add(-oldReleasesRetention))
+				return err
+			},
+		},
+		{
+			Name: "processed events",
+			Do: func(ctx context.Context) error {
+				_, err := queries.DeleteProcessedEvents(ctx, now().Add(-processedEventsRetention))
 				return err
 			},
 		},

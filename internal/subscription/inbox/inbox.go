@@ -44,10 +44,10 @@ func NewInboxWorker(d Deps) (*inboxWorker, error) {
 
 func (w *inboxWorker) Start(ctx context.Context) error {
 	w.logger.Info("starting")
-	return w.consumer.ConsumeJSON(ctx, rabbitmq.QueueSubscriptionInbox, w.handler)
+	return w.consumer.ConsumeJSON(ctx, rabbitmq.QueueSubscriptionInbox, w.handler, nil)
 }
 
-func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
+func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitmq.AckType, error) {
 	if err := events.Validate(msg.EventType, msg.Version); err != nil {
 		return rabbitmq.NackDiscard, err
 	}
@@ -60,7 +60,6 @@ func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
 			return rabbitmq.NackDiscard, fmt.Errorf("invalid payload")
 		}
 
-		ctx := context.Background()
 		tx, err := w.db.BeginTx(ctx, nil)
 		if err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("begin tx: %w", err)
@@ -68,10 +67,24 @@ func (w *inboxWorker) handler(msg events.Envelope) (rabbitmq.AckType, error) {
 		defer func() { _ = tx.Rollback() }()
 
 		qtx := w.q.WithTx(tx)
-		if err := qtx.MarkRepositoryRemoved(context.Background(), ev.RepositoryID); err != nil {
+		claimed, err := qtx.ClaimProcessedEvent(ctx, dbGen.ClaimProcessedEventParams{
+			EventID:   msg.EventID,
+			EventType: msg.EventType,
+		})
+		if err != nil {
+			return rabbitmq.NackRequeue, fmt.Errorf("claim event: %w", err)
+		}
+		if claimed == 0 {
+			if err := tx.Commit(); err != nil {
+				return rabbitmq.NackRequeue, fmt.Errorf("commit tx: %w", err)
+			}
+			return rabbitmq.Ack, nil
+		}
+
+		if err := qtx.MarkRepositoryRemoved(ctx, ev.RepositoryID); err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("update repo: %w", err)
 		}
-		if err := qtx.DeactivateSubsForRepoAndRemoveTokens(context.Background(), ev.RepositoryID); err != nil {
+		if err := qtx.DeactivateSubsForRepoAndRemoveTokens(ctx, ev.RepositoryID); err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("deactivate subs: %w", err)
 		}
 		if err := tx.Commit(); err != nil {

@@ -51,7 +51,17 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	}
 	g.Cleanup(func() { _ = rabbit.Close() })
 
-	rabbitConsumer, err := rabbitmq.NewConsumer(rabbit, logger, rabbitMetrics)
+	rabbitPublisher, err := rabbitmq.NewPublisher(rabbit, logger, rabbitMetrics)
+	if err != nil {
+		return fmt.Errorf("create rabbit publisher: %w", err)
+	}
+
+	rabbitConsumer, err := rabbitmq.NewConsumer(
+		rabbit,
+		logger,
+		rabbitMetrics,
+		rabbitmq.WithRetryPublisher(rabbitPublisher),
+	)
 	if err != nil {
 		return fmt.Errorf("create rabbit consumer: %w", err)
 	}

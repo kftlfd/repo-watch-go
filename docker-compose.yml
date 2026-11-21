@@ -41,11 +41,12 @@ services:
     image: rabbitmq:3.13-management
     restart: unless-stopped
     ports:
-      - "5672:5672"
-      - "15672:15672"
-      - "61613:61613"
+      - "5672:5672" # amqp091
+      - "15672:15672" # management
+      - "15692:15692" # Prometheus exporter
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 10s

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"repo-watch/internal/events"
 
@@ -39,13 +40,14 @@ func (a *fakeAcknowledger) Reject(_ uint64, requeue bool) error {
 }
 
 type fakeConsumerMetrics struct {
-	handled     []AckType
-	failures    int
-	defects     int
-	requeues    int
-	returns     []string
-	dlqDepth    int
-	dlqDepthSet int
+	handled              []AckType
+	failures             int
+	defects              int
+	requeues             int
+	retriesScheduled     []string
+	retriesExhausted     int
+	retryPublishFailures int
+	returns              []string
 }
 
 func (m *fakeConsumerMetrics) MessageHandled(_ string, ack AckType) {
@@ -55,12 +57,13 @@ func (m *fakeConsumerMetrics) MessageHandled(_ string, ack AckType) {
 func (m *fakeConsumerMetrics) HandlerFailed(string)         { m.failures++ }
 func (m *fakeConsumerMetrics) HandlerDefectDetected(string) { m.defects++ }
 func (m *fakeConsumerMetrics) Requeued(string)              { m.requeues++ }
+func (m *fakeConsumerMetrics) RetryScheduled(_ string, tier string) {
+	m.retriesScheduled = append(m.retriesScheduled, tier)
+}
+func (m *fakeConsumerMetrics) RetryExhausted(string)     { m.retriesExhausted++ }
+func (m *fakeConsumerMetrics) RetryPublishFailed(string) { m.retryPublishFailures++ }
 func (m *fakeConsumerMetrics) MessageReturned(routingKey string) {
 	m.returns = append(m.returns, routingKey)
-}
-func (m *fakeConsumerMetrics) SetDLQDepth(depth int) {
-	m.dlqDepth = depth
-	m.dlqDepthSet++
 }
 func (m *fakeConsumerMetrics) SetConnected(bool) {}
 func (m *fakeConsumerMetrics) ConnectionLost()   {}
@@ -74,6 +77,36 @@ func testDelivery(acknowledger *fakeAcknowledger, body string) *amqp091.Delivery
 	}
 }
 
+func testDeliveryWithHeaders(
+	acknowledger *fakeAcknowledger,
+	body string,
+	headers amqp091.Table,
+) *amqp091.Delivery {
+	delivery := testDelivery(acknowledger, body)
+	delivery.Headers = headers
+	return delivery
+}
+
+type retryCall struct {
+	queue   string
+	attempt int32
+}
+
+type fakeRetryPublisher struct {
+	calls []retryCall
+	err   error
+}
+
+func (p *fakeRetryPublisher) PublishRetry(
+	_ context.Context,
+	queue string,
+	_ amqp091.Delivery,
+	attempt int32,
+) error {
+	p.calls = append(p.calls, retryCall{queue: queue, attempt: attempt})
+	return p.err
+}
+
 func newTestConsumer(t *testing.T, metrics MetricsRecorder) *consumer {
 	t.Helper()
 
@@ -82,20 +115,64 @@ func newTestConsumer(t *testing.T, metrics MetricsRecorder) *consumer {
 	return c
 }
 
+func newTestSession(
+	t *testing.T,
+	metrics MetricsRecorder,
+	handler JSONEventHandler,
+	cfg *ConsumerSessionConfig,
+) *consumerSession {
+	t.Helper()
+
+	c := newTestConsumer(t, metrics)
+	session := &consumerSession{
+		client:    c.client,
+		logger:    c.logger,
+		metrics:   c.metrics,
+		retryPub:  c.retryPub,
+		ctx:       t.Context(),
+		queueName: "test-queue",
+		handler:   handler,
+		cfg:       ConsumerSessionConfig{HandlerTimeout: defaultHandlerTimeout},
+	}
+	if cfg != nil {
+		session.cfg = *cfg
+	}
+	return session
+}
+
 func TestHandleDeliveryDiscardsInvalidEnvelope(t *testing.T) {
 	called := false
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
-	c := newTestConsumer(t, metrics)
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		called = true
+		return Ack, nil
+	}, nil)
 
-	err := c.handleDelivery(
-		testDelivery(acknowledger, `{"id":`),
-		"test-queue",
-		func(events.Envelope) (AckType, error) {
-			called = true
-			return Ack, nil
-		},
-	)
+	err := s.handleDelivery(testDelivery(acknowledger, `{"id":`))
+
+	require.NoError(t, err)
+	require.False(t, called)
+	require.True(t, acknowledger.rejectCalled)
+	require.False(t, acknowledger.rejectRequeue)
+	require.False(t, acknowledger.ackCalled)
+	require.False(t, acknowledger.nackCalled)
+	require.Equal(t, []AckType{NackDiscard}, metrics.handled)
+	require.Equal(t, 1, metrics.failures)
+	require.Zero(t, metrics.defects)
+	require.Zero(t, metrics.requeues)
+}
+
+func TestHandleDeliveryDiscardsMissingEventID(t *testing.T) {
+	called := false
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		called = true
+		return Ack, nil
+	}, nil)
+
+	err := s.handleDelivery(testDelivery(acknowledger, `{"type":"repository.changed","payload":{}}`))
 
 	require.NoError(t, err)
 	require.False(t, called)
@@ -114,15 +191,13 @@ func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 	var got events.Envelope
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
-	c := newTestConsumer(t, metrics)
+	s := newTestSession(t, metrics, func(_ context.Context, msg events.Envelope) (AckType, error) {
+		got = msg
+		return NackRequeue, wantErr
+	}, nil)
 
-	err := c.handleDelivery(
+	err := s.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
-		"test-queue",
-		func(msg events.Envelope) (AckType, error) {
-			got = msg
-			return NackRequeue, wantErr
-		},
 	)
 
 	require.NoError(t, err)
@@ -138,17 +213,113 @@ func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 	require.Equal(t, 1, metrics.requeues)
 }
 
+func TestHandleDeliverySchedulesFirstRetryTier(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	retryPub := &fakeRetryPublisher{}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return NackRequeue, errors.New("transient database failure")
+	}, nil)
+	s.retryPub = retryPub
+
+	err := s.handleDelivery(
+		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
+	)
+
+	require.NoError(t, err)
+	require.True(t, acknowledger.ackCalled)
+	require.False(t, acknowledger.nackCalled)
+	require.False(t, acknowledger.rejectCalled)
+	require.Len(t, retryPub.calls, 1)
+	require.Equal(t, "test-queue.retry.30s", retryPub.calls[0].queue)
+	require.Equal(t, int32(1), retryPub.calls[0].attempt)
+	require.Equal(t, []AckType{NackRequeue}, metrics.handled)
+	require.Equal(t, []string{"30s"}, metrics.retriesScheduled)
+	require.Zero(t, metrics.requeues)
+	require.Zero(t, metrics.retriesExhausted)
+	require.Zero(t, metrics.retryPublishFailures)
+}
+
+func TestHandleDeliverySchedulesLastRetryTier(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	retryPub := &fakeRetryPublisher{}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return NackRequeue, errors.New("transient database failure")
+	}, nil)
+	s.retryPub = retryPub
+
+	err := s.handleDelivery(testDeliveryWithHeaders(
+		acknowledger,
+		`{"id":"event-1","type":"repository.changed","payload":{}}`,
+		amqp091.Table{RetryCountHeader: int32(1)},
+	))
+
+	require.NoError(t, err)
+	require.True(t, acknowledger.ackCalled)
+	require.Len(t, retryPub.calls, 1)
+	require.Equal(t, "test-queue.retry.10m", retryPub.calls[0].queue)
+	require.Equal(t, int32(2), retryPub.calls[0].attempt)
+	require.Equal(t, []string{"10m"}, metrics.retriesScheduled)
+}
+
+func TestHandleDeliveryDeadLettersAfterRetryLimit(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	retryPub := &fakeRetryPublisher{}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return NackRequeue, errors.New("transient database failure")
+	}, nil)
+	s.retryPub = retryPub
+
+	err := s.handleDelivery(testDeliveryWithHeaders(
+		acknowledger,
+		`{"id":"event-1","type":"repository.changed","payload":{}}`,
+		amqp091.Table{RetryCountHeader: int32(defaultMaxRetryAttempts)},
+	))
+
+	require.NoError(t, err)
+	require.False(t, acknowledger.ackCalled)
+	require.False(t, acknowledger.nackCalled)
+	require.True(t, acknowledger.rejectCalled)
+	require.False(t, acknowledger.rejectRequeue)
+	require.Empty(t, retryPub.calls)
+	require.Equal(t, 1, metrics.retriesExhausted)
+	require.Zero(t, metrics.requeues)
+}
+
+func TestHandleDeliveryRequeuesWhenRetryPublishFails(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	retryPub := &fakeRetryPublisher{err: errors.New("publish failed")}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return NackRequeue, errors.New("transient database failure")
+	}, nil)
+	s.retryPub = retryPub
+
+	err := s.handleDelivery(
+		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
+	)
+
+	require.NoError(t, err)
+	require.False(t, acknowledger.ackCalled)
+	require.True(t, acknowledger.nackCalled)
+	require.True(t, acknowledger.nackRequeue)
+	require.False(t, acknowledger.rejectCalled)
+	require.Equal(t, 1, metrics.retryPublishFailures)
+	require.Equal(t, 1, metrics.requeues)
+	require.Empty(t, metrics.retriesScheduled)
+}
+
 func TestHandleDeliveryAcksSuccessfulHandler(t *testing.T) {
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
-	c := newTestConsumer(t, metrics)
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return Ack, nil
+	}, nil)
 
-	err := c.handleDelivery(
+	err := s.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
-		"test-queue",
-		func(events.Envelope) (AckType, error) {
-			return Ack, nil
-		},
 	)
 
 	require.NoError(t, err)
@@ -164,14 +335,12 @@ func TestHandleDeliveryAcksSuccessfulHandler(t *testing.T) {
 func TestHandleDeliveryReturnsAckError(t *testing.T) {
 	ackErr := errors.New("ack failed")
 	acknowledger := &fakeAcknowledger{err: ackErr}
-	c := newTestConsumer(t, &fakeConsumerMetrics{})
+	s := newTestSession(t, &fakeConsumerMetrics{}, func(context.Context, events.Envelope) (AckType, error) {
+		return Ack, nil
+	}, nil)
 
-	err := c.handleDelivery(
+	err := s.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
-		"test-queue",
-		func(events.Envelope) (AckType, error) {
-			return Ack, nil
-		},
 	)
 
 	require.ErrorIs(t, err, ackErr)
@@ -181,14 +350,12 @@ func TestHandleDeliveryRequeuesAckWithErrorAsDefect(t *testing.T) {
 	handlerErr := errors.New("post-ack failure")
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
-	c := newTestConsumer(t, metrics)
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return Ack, handlerErr
+	}, nil)
 
-	err := c.handleDelivery(
+	err := s.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
-		"test-queue",
-		func(events.Envelope) (AckType, error) {
-			return Ack, handlerErr
-		},
 	)
 
 	require.NoError(t, err)
@@ -205,14 +372,12 @@ func TestHandleDeliveryRequeuesAckWithErrorAsDefect(t *testing.T) {
 func TestHandleDeliveryReturnsInvalidAckAsFatalDefect(t *testing.T) {
 	acknowledger := &fakeAcknowledger{}
 	metrics := &fakeConsumerMetrics{}
-	c := newTestConsumer(t, metrics)
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		return AckType("not-a-valid-ack"), nil
+	}, nil)
 
-	err := c.handleDelivery(
+	err := s.handleDelivery(
 		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
-		"test-queue",
-		func(events.Envelope) (AckType, error) {
-			return AckType("not-a-valid-ack"), nil
-		},
 	)
 
 	require.ErrorIs(t, err, errInvalidAck)
@@ -224,6 +389,22 @@ func TestHandleDeliveryReturnsInvalidAckAsFatalDefect(t *testing.T) {
 	require.Equal(t, 1, metrics.failures)
 	require.Equal(t, 1, metrics.defects)
 	require.Zero(t, metrics.requeues)
+}
+
+func TestHandleDeliveryAppliesHandlerTimeout(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	s := newTestSession(t, &fakeConsumerMetrics{}, func(ctx context.Context, _ events.Envelope) (AckType, error) {
+		<-ctx.Done()
+		return NackRequeue, ctx.Err()
+	}, &ConsumerSessionConfig{HandlerTimeout: 10 * time.Millisecond})
+
+	err := s.handleDelivery(
+		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
+	)
+
+	require.NoError(t, err)
+	require.True(t, acknowledger.nackCalled)
+	require.True(t, acknowledger.nackRequeue)
 }
 
 func TestIsFatalConsumeError(t *testing.T) {
@@ -263,9 +444,9 @@ func TestConsumeJSONReturnsNilWhenContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.NoError(t, c.ConsumeJSON(ctx, "test-queue", func(events.Envelope) (AckType, error) {
+	require.NoError(t, c.ConsumeJSON(ctx, "test-queue", func(context.Context, events.Envelope) (AckType, error) {
 		return Ack, nil
-	}))
+	}, nil))
 }
 
 func TestConsumeJSONReturnsClosedWhenClientIsClosed(t *testing.T) {
@@ -275,8 +456,8 @@ func TestConsumeJSONReturnsClosedWhenClientIsClosed(t *testing.T) {
 	c, err := NewConsumer(client, testLogger(), nil)
 	require.NoError(t, err)
 
-	err = c.ConsumeJSON(context.Background(), "test-queue", func(events.Envelope) (AckType, error) {
+	err = c.ConsumeJSON(context.Background(), "test-queue", func(context.Context, events.Envelope) (AckType, error) {
 		return Ack, nil
-	})
+	}, nil)
 	require.ErrorIs(t, err, ErrClosed)
 }

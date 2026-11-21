@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"repo-watch/internal/events"
@@ -103,17 +104,14 @@ func TestNewPublisherValidatesDependencies(t *testing.T) {
 	require.NotNil(t, pub.metrics)
 }
 
-func TestPublisherObserveReturnsRecordsEveryReturn(t *testing.T) {
+func TestPublisherRecordsReturnedMessage(t *testing.T) {
 	metrics := &fakeConsumerMetrics{}
 	pub, err := NewPublisher(newTestClient(t), testLogger(), metrics)
 	require.NoError(t, err)
 
-	returns := make(chan amqp091.Return, 2)
-	returns <- amqp091.Return{RoutingKey: "repository.changed"}
-	returns <- amqp091.Return{RoutingKey: "email.queued"}
-	close(returns)
+	pub.recordPublishError(&ReturnedError{Return: amqp091.Return{RoutingKey: "repository.changed"}})
+	require.Equal(t, []string{"repository.changed"}, metrics.returns)
 
-	pub.observeReturns(returns)
-
-	require.Equal(t, []string{"repository.changed", "email.queued"}, metrics.returns)
+	pub.recordPublishError(errors.New("other publish failure"))
+	require.Equal(t, []string{"repository.changed"}, metrics.returns)
 }
