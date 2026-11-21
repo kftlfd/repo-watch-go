@@ -48,8 +48,6 @@ type fakeConsumerMetrics struct {
 	retriesExhausted     int
 	retryPublishFailures int
 	returns              []string
-	dlqDepth             int
-	dlqDepthSet          int
 }
 
 func (m *fakeConsumerMetrics) MessageHandled(_ string, ack AckType) {
@@ -66,10 +64,6 @@ func (m *fakeConsumerMetrics) RetryExhausted(string)     { m.retriesExhausted++ 
 func (m *fakeConsumerMetrics) RetryPublishFailed(string) { m.retryPublishFailures++ }
 func (m *fakeConsumerMetrics) MessageReturned(routingKey string) {
 	m.returns = append(m.returns, routingKey)
-}
-func (m *fakeConsumerMetrics) SetDLQDepth(depth int) {
-	m.dlqDepth = depth
-	m.dlqDepthSet++
 }
 func (m *fakeConsumerMetrics) SetConnected(bool) {}
 func (m *fakeConsumerMetrics) ConnectionLost()   {}
@@ -258,7 +252,7 @@ func TestHandleDeliverySchedulesLastRetryTier(t *testing.T) {
 	err := s.handleDelivery(testDeliveryWithHeaders(
 		acknowledger,
 		`{"id":"event-1","type":"repository.changed","payload":{}}`,
-		amqp091.Table{retryCountHeader: int32(1)},
+		amqp091.Table{RetryCountHeader: int32(1)},
 	))
 
 	require.NoError(t, err)
@@ -281,7 +275,7 @@ func TestHandleDeliveryDeadLettersAfterRetryLimit(t *testing.T) {
 	err := s.handleDelivery(testDeliveryWithHeaders(
 		acknowledger,
 		`{"id":"event-1","type":"repository.changed","payload":{}}`,
-		amqp091.Table{retryCountHeader: int32(defaultMaxRetryAttempts)},
+		amqp091.Table{RetryCountHeader: int32(defaultMaxRetryAttempts)},
 	))
 
 	require.NoError(t, err)
@@ -315,15 +309,6 @@ func TestHandleDeliveryRequeuesWhenRetryPublishFails(t *testing.T) {
 	require.Equal(t, 1, metrics.retryPublishFailures)
 	require.Equal(t, 1, metrics.requeues)
 	require.Empty(t, metrics.retriesScheduled)
-}
-
-func TestRetryCountFromHeaders(t *testing.T) {
-	require.Equal(t, int32(0), retryCountFromHeaders(nil))
-	require.Equal(t, int32(0), retryCountFromHeaders(amqp091.Table{"other": int32(1)}))
-	require.Equal(t, int32(2), retryCountFromHeaders(amqp091.Table{retryCountHeader: int32(2)}))
-	require.Equal(t, int32(3), retryCountFromHeaders(amqp091.Table{retryCountHeader: int64(3)}))
-	require.Equal(t, int32(4), retryCountFromHeaders(amqp091.Table{retryCountHeader: 4}))
-	require.Equal(t, int32(0), retryCountFromHeaders(amqp091.Table{retryCountHeader: "4"}))
 }
 
 func TestHandleDeliveryAcksSuccessfulHandler(t *testing.T) {

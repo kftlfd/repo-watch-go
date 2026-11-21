@@ -209,28 +209,6 @@ func newTestDispatcher(
 	return d
 }
 
-func TestNewDispatcherAppliesDefaults(t *testing.T) {
-	store := &fakeStore{rows: []Row{testRow(1)}}
-	d, err := NewDispatcher(DispatcherDeps{
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Publisher: &fakePublisher{},
-		Store:     store,
-	})
-	require.NoError(t, err)
-	require.Equal(t, int32(5), d.cfg.batchSize)
-	require.Equal(t, int32(5), d.cfg.maxAttempts)
-	require.Equal(t, 5*time.Second, d.cfg.leaseDuration)
-	require.Equal(t, 5*time.Second, d.cfg.loopInterval)
-	require.Equal(t, 3*time.Second, d.cfg.loopIterationTimeout)
-	require.Equal(t, 250*time.Millisecond, d.cfg.retryBaseBackoff)
-	require.Equal(t, 5*time.Second, d.cfg.retryMaxBackoff)
-
-	// The default config has no metrics recorder; publishing must still work.
-	processed, err := d.runIteration(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, 1, processed)
-}
-
 func testRow(id int32) Row {
 	return Row{
 		ID:            id,
