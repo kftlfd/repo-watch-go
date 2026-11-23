@@ -129,6 +129,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		cleanup.CreateCleanupTasks(queries, time.Now),
 		time.Hour,
 		time.Minute,
+		taskrunner.NewMetrics(metricsReg),
 	)
 
 	outboxDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherDeps{

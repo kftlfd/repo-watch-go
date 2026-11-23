@@ -136,6 +136,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		cleanup.CreateCleanupTasks(queries, time.Now),
 		time.Hour,
 		time.Minute,
+		taskrunner.NewMetrics(metricsReg),
 	)
 
 	scannerWorker := worker.NewScannerWorker(worker.Deps{
