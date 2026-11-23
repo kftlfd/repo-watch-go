@@ -11,6 +11,7 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 
 	"repo-watch/internal/events"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/utils"
 )
 
@@ -266,10 +267,9 @@ func isFatalConsumeError(err error) bool {
 func (s *consumerSession) invokeHandler(
 	ctx context.Context,
 	msg events.Envelope,
-) (ack AckType, err error, panicked bool) {
+) (ack AckType, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			panicked = true
 			ack = NackDiscard
 			err = fmt.Errorf("handler panic: %v", r)
 
@@ -278,14 +278,14 @@ func (s *consumerSession) invokeHandler(
 				"queue", s.queueName,
 				"event_id", msg.EventID,
 				"event_type", msg.EventType,
+				"correlation_id", observability.GetCorrelationID(ctx),
 				"panic", r,
 				"stack", string(debug.Stack()),
 			)
 		}
 	}()
 
-	ack, err = s.handler(ctx, msg)
-	return ack, err, false
+	return s.handler(ctx, msg)
 }
 
 func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
@@ -306,17 +306,28 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 		invalidAck bool
 	}
 
+	correlationID := delivery.CorrelationId
+
 	msg, err = events.DecodeEnvelope(delivery.Body)
 	if err != nil {
+		if correlationID == "" {
+			correlationID = delivery.MessageId
+		}
 		ack = NackDiscard
 	} else {
+		if correlationID == "" {
+			correlationID = msg.CorrelationID
+		}
+		if correlationID == "" {
+			correlationID = msg.EventID
+		}
+
 		handlerCtx, cancel := context.WithTimeout(s.ctx, s.cfg.HandlerTimeout)
-		ack, err, panicked := s.invokeHandler(handlerCtx, msg)
+		handlerCtx = observability.WithCorrelationID(handlerCtx, correlationID)
+
+		ack, err = s.invokeHandler(handlerCtx, msg)
 		cancel()
 
-		if panicked {
-			handlerStatus.defects = true
-		}
 		if ack == Ack && err != nil {
 			ack = NackRequeue
 			handlerStatus.defects = true
@@ -326,6 +337,10 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 			slog.String("event_id", msg.EventID),
 			slog.String("event_type", msg.EventType),
 		)
+	}
+
+	if correlationID != "" {
+		logArgs = append(logArgs, slog.String("correlation_id", correlationID))
 	}
 
 	if err != nil {

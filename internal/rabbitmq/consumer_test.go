@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"repo-watch/internal/events"
+	"repo-watch/internal/observability"
 
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/require"
@@ -213,6 +214,49 @@ func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 	require.Equal(t, 1, metrics.failures)
 	require.Zero(t, metrics.defects)
 	require.Equal(t, 1, metrics.requeues)
+}
+
+func TestHandleDeliveryPropagatesCorrelationID(t *testing.T) {
+	tests := []struct {
+		name          string
+		correlationID string
+		body          string
+		want          string
+	}{
+		{
+			name:          "amqp correlation id",
+			correlationID: "corr-amqp",
+			body:          `{"id":"event-1","type":"repository.changed","payload":{}}`,
+			want:          "corr-amqp",
+		},
+		{
+			name: "envelope correlation id",
+			body: `{"id":"event-1","type":"repository.changed","correlation_id":"corr-envelope","payload":{}}`,
+			want: "corr-envelope",
+		},
+		{
+			name: "event id fallback",
+			body: `{"id":"event-1","type":"repository.changed","payload":{}}`,
+			want: "event-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+
+			s := newTestSession(t, &fakeConsumerMetrics{}, func(ctx context.Context, _ events.Envelope) (AckType, error) {
+				got = observability.GetCorrelationID(ctx)
+				return Ack, nil
+			}, nil)
+
+			delivery := testDelivery(&fakeAcknowledger{}, tt.body)
+			delivery.CorrelationId = tt.correlationID
+
+			require.NoError(t, s.handleDelivery(delivery))
+			require.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestHandleDeliveryRecoversHandlerPanic(t *testing.T) {

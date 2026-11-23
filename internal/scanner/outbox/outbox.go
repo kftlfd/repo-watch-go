@@ -55,6 +55,7 @@ func (s *scannerOutbox) GetNextBatch(ctx context.Context, batchSize int32, lease
 			ID:            row.ID,
 			EventType:     row.EventType,
 			EventID:       getEventID(row.ID),
+			CorrelationID: row.CorrelationID,
 			Version:       row.EventVersion,
 			InvalidReason: validateEventType(row.EventType),
 			CreatedAt:     row.CreatedAt,

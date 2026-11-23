@@ -72,11 +72,17 @@ func (p *publisher) PublishJSON(
 
 	routingKey := msg.EventType
 
+	correlationID := msg.CorrelationID
+	if correlationID == "" {
+		correlationID = msg.EventID
+	}
+
 	publishing := amqp091.Publishing{
-		ContentType:  "application/json",
-		DeliveryMode: amqp091.Persistent,
-		MessageId:    msg.EventID,
-		Body:         body,
+		ContentType:   "application/json",
+		DeliveryMode:  amqp091.Persistent,
+		MessageId:     msg.EventID,
+		CorrelationId: correlationID,
+		Body:          body,
 	}
 
 	p.mu.Lock()

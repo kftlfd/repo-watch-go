@@ -12,8 +12,8 @@ import (
 	"repo-watch/internal/admin/ready"
 	"repo-watch/internal/app"
 	"repo-watch/internal/httpserver"
-	"repo-watch/internal/logger"
 	"repo-watch/internal/mailer"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
 )
 
@@ -22,7 +22,7 @@ func main() {
 
 	cfg := loadConfig()
 
-	logger := logger.NewLogger(cfg.LogLevel, "service", "mailer")
+	logger := observability.NewLogger(cfg.LogLevel, "service", "mailer")
 
 	app.Run(logger, cfg.run)
 }

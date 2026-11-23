@@ -59,9 +59,9 @@ ON CONFLICT (repository_id, tag) DO NOTHING;
 
 -- name: CreateOutboxRow :one
 INSERT INTO
-    outbox (event_type, event_version, payload)
+    outbox (event_type, event_version, correlation_id, payload)
 VALUES
-    ($1, $2, $3)
+    ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: GetEventTypeCount :one

@@ -17,7 +17,7 @@ import (
 	"repo-watch/internal/dispatcher"
 	"repo-watch/internal/github"
 	"repo-watch/internal/httpserver"
-	"repo-watch/internal/logger"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/cleanup"
@@ -36,7 +36,7 @@ func main() {
 
 	cfg := loadConfig()
 
-	logger := logger.NewLogger(cfg.LogLevel, "service", "scanner")
+	logger := observability.NewLogger(cfg.LogLevel, "service", "scanner")
 
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
 		app.Run(logger, cfg.runMigrate)

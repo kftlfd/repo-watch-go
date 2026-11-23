@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"repo-watch/internal/events"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/utils"
 )
@@ -24,13 +25,14 @@ const (
 )
 
 type Row struct {
-	ID        int32
-	EventType string
-	EventID   string
-	Version   int32
-	Payload   json.RawMessage
-	CreatedAt time.Time
-	Attempts  int32
+	ID            int32
+	EventType     string
+	EventID       string
+	CorrelationID string
+	Version       int32
+	Payload       json.RawMessage
+	CreatedAt     time.Time
+	Attempts      int32
 
 	// InvalidReason is set by a service-specific store when a row cannot be
 	// mapped to an event. The dispatcher treats such rows as terminal failures
@@ -365,12 +367,18 @@ func (d *Dispatcher) recordStats(ctx context.Context) {
 }
 
 func (d *Dispatcher) publishRow(ctx context.Context, row Row) (published bool, terminal bool, err error) {
+	if row.CorrelationID == "" {
+		row.CorrelationID = row.EventID
+	}
+	ctx = observability.WithCorrelationID(ctx, row.CorrelationID)
+
 	err = d.pub.PublishJSON(ctx, events.Envelope{
-		EventID:   row.EventID,
-		EventType: row.EventType,
-		Version:   row.Version,
-		CreatedAt: row.CreatedAt,
-		Payload:   row.Payload,
+		EventID:       row.EventID,
+		EventType:     row.EventType,
+		Version:       row.Version,
+		CorrelationID: row.CorrelationID,
+		CreatedAt:     row.CreatedAt,
+		Payload:       row.Payload,
 	})
 
 	if err == nil {
@@ -404,6 +412,8 @@ func (d *Dispatcher) publishRow(ctx context.Context, row Row) (published bool, t
 		"outbox publish failed; retry scheduled",
 		"outbox_id", row.ID,
 		"event_type", row.EventType,
+		"event_id", row.EventID,
+		"correlation_id", row.CorrelationID,
 		"attempt", failure.Attempts,
 		"next_attempt_at", nextAttemptAt,
 		"error", err,
@@ -439,6 +449,8 @@ func (d *Dispatcher) recordFailure(
 			"outbox event dead-lettered",
 			"outbox_id", row.ID,
 			"event_type", row.EventType,
+			"event_id", row.EventID,
+			"correlation_id", row.CorrelationID,
 			"attempts", failure.Attempts,
 			"error", reason,
 		)

@@ -38,6 +38,7 @@ CREATE TABLE outbox (
     id SERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
     event_version INTEGER NOT NULL DEFAULT 1,
+    correlation_id TEXT NOT NULL DEFAULT '',
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     leased_until TIMESTAMPTZ,

@@ -17,6 +17,7 @@ type Outbox struct {
 	RepositoryID  string
 	Tag           string
 	UnsubToken    string
+	CorrelationID string
 	Payload       json.RawMessage
 	CreatedAt     time.Time
 	LeasedUntil   sql.NullTime

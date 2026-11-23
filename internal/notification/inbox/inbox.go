@@ -10,6 +10,7 @@ import (
 	"repo-watch/internal/events"
 	"repo-watch/internal/notification/db/dbGen"
 	"repo-watch/internal/notification/outbox"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
 )
 
@@ -56,6 +57,8 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 		return rabbitmq.NackDiscard, err
 	}
 
+	correlationID := observability.GetCorrelationID(ctx)
+
 	switch msg.EventType {
 
 	case events.EventSubscriptionChanged:
@@ -90,9 +93,10 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 		}
 		return w.processEvent(ctx, msg, func(ctx context.Context, q *dbGen.Queries) error {
 			if err := q.CreateNewReleaseOutboxNotifications(ctx, dbGen.CreateNewReleaseOutboxNotificationsParams{
-				RepositoryID: ev.RepositoryID,
-				Tag:          ev.Tag,
-				Payload:      payload,
+				RepositoryID:  ev.RepositoryID,
+				Tag:           ev.Tag,
+				Payload:       payload,
+				CorrelationID: correlationID,
 			}); err != nil {
 				return fmt.Errorf("create notifications: %w", err)
 			}
@@ -110,9 +114,10 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 		}
 		return w.processEvent(ctx, msg, func(ctx context.Context, q *dbGen.Queries) error {
 			if err := q.DeactivateSubsForRepoAndNotifySubs(ctx, dbGen.DeactivateSubsForRepoAndNotifySubsParams{
-				RepositoryID: ev.RepositoryID,
-				Tag:          "repo_removed:" + msg.EventID,
-				Payload:      payload,
+				RepositoryID:  ev.RepositoryID,
+				Tag:           "repo_removed:" + msg.EventID,
+				Payload:       payload,
+				CorrelationID: correlationID,
 			}); err != nil {
 				return fmt.Errorf("deactivate repo: %w", err)
 			}

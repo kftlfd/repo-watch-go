@@ -11,6 +11,7 @@ import (
 	"repo-watch/internal/emails"
 	"repo-watch/internal/events"
 	"repo-watch/internal/github"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/subscription/db/dbGen"
 )
 
@@ -407,9 +408,10 @@ func saveToOutbox(ctx context.Context, qtx *dbGen.Queries, eventType string, eve
 	}
 
 	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-		EventType:    eventType,
-		EventVersion: eventVersion,
-		Payload:      jsonData,
+		EventType:     eventType,
+		EventVersion:  eventVersion,
+		CorrelationID: observability.GetCorrelationID(ctx),
+		Payload:       jsonData,
 	})
 
 	return err

@@ -16,12 +16,12 @@ import (
 	"repo-watch/internal/app"
 	"repo-watch/internal/dispatcher"
 	"repo-watch/internal/httpserver"
-	"repo-watch/internal/logger"
 	"repo-watch/internal/notification/cleanup"
 	"repo-watch/internal/notification/db/dbGen"
 	"repo-watch/internal/notification/db/migrations"
 	"repo-watch/internal/notification/inbox"
 	"repo-watch/internal/notification/outbox"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/taskrunner"
@@ -34,7 +34,7 @@ func main() {
 
 	cfg := loadConfig()
 
-	logger := logger.NewLogger(cfg.LogLevel, "service", "notification")
+	logger := observability.NewLogger(cfg.LogLevel, "service", "notification")
 
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
 		app.Run(logger, cfg.runMigrate)

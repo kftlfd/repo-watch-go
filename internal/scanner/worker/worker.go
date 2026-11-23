@@ -11,6 +11,7 @@ import (
 
 	"repo-watch/internal/events"
 	"repo-watch/internal/github"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/db/dbGen"
 )
@@ -73,8 +74,14 @@ func (w *scannerWorker) Start(ctx context.Context) error {
 	w.logger.Info("starting")
 
 	for {
-		if err := w.DoScanIteration(); err != nil {
-			w.logger.Error("scanner iteration error", "error", err)
+		iterCtx, cancel := context.WithTimeout(ctx, w.cfg.IterationTimeout)
+		correlationID := observability.NewCorrelationID()
+		iterCtx = observability.WithCorrelationID(iterCtx, correlationID)
+		err := w.DoScanIteration(iterCtx, correlationID)
+		cancel()
+
+		if err != nil {
+			w.logger.Error("scanner iteration error", "error", err, "correlation_id", correlationID)
 			w.met.ScanErr()
 		}
 
@@ -165,11 +172,8 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func (w *scannerWorker) DoScanIteration() error {
-	w.logger.Info("new iteration")
-
-	ctx, cancel := context.WithTimeout(context.Background(), w.cfg.IterationTimeout)
-	defer cancel()
+func (w *scannerWorker) DoScanIteration(ctx context.Context, correlationID string) error {
+	w.logger.Info("new iteration", "correlation_id", correlationID)
 
 	batch, err := w.q.GetReposScanBatch(ctx, dbGen.GetReposScanBatchParams{
 		Limit: w.cfg.BatchSize,
@@ -185,7 +189,12 @@ func (w *scannerWorker) DoScanIteration() error {
 	for _, repo := range batch {
 		latestTag, err := w.fetchLatestTag(ctx, repo)
 		if err != nil {
-			w.logger.Info("repo scan", "repo", repo.ID, "status", "gh error", "err", err)
+			w.logger.Info("repo scan",
+				"repo", repo.ID,
+				"status", "gh error",
+				"err", err,
+				"correlation_id", correlationID,
+			)
 
 			if errors.Is(err, github.ErrNotFound) {
 				writeCtx, cancel := persistenceContext(ctx)
@@ -200,7 +209,7 @@ func (w *scannerWorker) DoScanIteration() error {
 			// A rate limit applies to the whole client, so stop this batch
 			// instead of immediately requesting every remaining repo.
 			if errors.Is(err, github.ErrRateLimit) {
-				w.logger.Info("stopping batch after github rate limit")
+				w.logger.Info("stopping batch after github rate limit", "correlation_id", correlationID)
 				break
 			}
 
@@ -208,9 +217,18 @@ func (w *scannerWorker) DoScanIteration() error {
 		}
 
 		if repo.LatestSeenTag != latestTag {
-			w.logger.Info("repo scan", "repo", repo.ID, "status", "new release", "tag", latestTag)
+			w.logger.Info("repo scan",
+				"repo", repo.ID,
+				"status", "new release",
+				"tag", latestTag,
+				"correlation_id", correlationID,
+			)
 		} else {
-			w.logger.Info("repo scan", "repo", repo.ID, "status", "not changed")
+			w.logger.Info("repo scan",
+				"repo", repo.ID,
+				"status", "not changed",
+				"correlation_id", correlationID,
+			)
 		}
 
 		writeCtx, cancel := persistenceContext(ctx)
@@ -264,9 +282,10 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, l
 			}
 
 			_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-				EventType:    events.EventReleaseDetected,
-				EventVersion: events.VersionReleaseDetected,
-				Payload:      payload,
+				EventType:     events.EventReleaseDetected,
+				EventVersion:  events.VersionReleaseDetected,
+				CorrelationID: observability.GetCorrelationID(ctx),
+				Payload:       payload,
 			})
 			if err != nil {
 				return fmt.Errorf("insert into outbox: %w", err)
@@ -316,9 +335,10 @@ func (w *scannerWorker) removeRepo(ctx context.Context, repo dbGen.Repository) e
 	}
 
 	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-		EventType:    events.EventRepositoryRemoved,
-		EventVersion: events.VersionRepositoryRemoved,
-		Payload:      payload,
+		EventType:     events.EventRepositoryRemoved,
+		EventVersion:  events.VersionRepositoryRemoved,
+		CorrelationID: observability.GetCorrelationID(ctx),
+		Payload:       payload,
 	})
 	if err != nil {
 		return fmt.Errorf("insert into outbox: %w", err)

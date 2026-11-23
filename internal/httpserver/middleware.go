@@ -1,34 +1,34 @@
 package httpserver
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"log/slog"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"repo-watch/internal/observability"
 )
 
 const (
 	RequestIDHeader = "X-Request-ID"
-	requestIDKey    = "request_id"
 )
 
 func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx := c.Request.Context()
 		start := time.Now()
 		path := c.FullPath()
 		query := c.Request.URL.RawQuery
 
-		requestID := strings.TrimSpace(c.GetHeader(RequestIDHeader))
+		requestID := observability.NormalizeCorrelationID(c.GetHeader(RequestIDHeader))
 		if requestID == "" {
-			requestID = newRequestID()
+			requestID = observability.NewCorrelationID()
 		}
-		c.Set(requestIDKey, requestID)
 		c.Header(RequestIDHeader, requestID)
+		ctx = observability.WithCorrelationID(ctx, requestID)
+
+		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
 
@@ -37,6 +37,7 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 
 		attrs := []any{
 			slog.String("request_id", requestID),
+			slog.String("correlation_id", requestID),
 			slog.String("method", c.Request.Method),
 			slog.String("path", path),
 			slog.String("query", query),
@@ -69,13 +70,4 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 			logger.Info("request", attrs...)
 		}
 	}
-}
-
-func newRequestID() string {
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
-	}
-
-	return hex.EncodeToString(buf[:])
 }

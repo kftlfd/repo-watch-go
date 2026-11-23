@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 
-	"repo-watch/internal/logger"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/utils"
 )
@@ -20,7 +20,7 @@ type Config struct {
 
 func loadConfig() *Config {
 	return &Config{
-		LogLevel: logger.ParseLevel(os.Getenv("LOG_LEVEL")),
+		LogLevel: observability.ParseLevel(os.Getenv("LOG_LEVEL")),
 
 		IsDev:     os.Getenv("ENV") == "dev",
 		PortAdmin: utils.Env("PORT_ADMIN", "4000"),

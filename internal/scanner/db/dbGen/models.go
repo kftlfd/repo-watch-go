@@ -14,6 +14,7 @@ type Outbox struct {
 	ID            int32
 	EventType     string
 	EventVersion  int32
+	CorrelationID string
 	Payload       json.RawMessage
 	CreatedAt     time.Time
 	LeasedUntil   sql.NullTime

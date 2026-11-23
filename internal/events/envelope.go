@@ -8,11 +8,12 @@ import (
 
 // Envelope is the wire format shared by every producer and consumer.
 type Envelope struct {
-	EventID   string          `json:"id"`
-	EventType string          `json:"type"`
-	Version   int32           `json:"version"`
-	CreatedAt time.Time       `json:"created_at"`
-	Payload   json.RawMessage `json:"payload"`
+	EventID       string          `json:"id"`
+	EventType     string          `json:"type"`
+	Version       int32           `json:"version"`
+	CorrelationID string          `json:"correlation_id,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	Payload       json.RawMessage `json:"payload"`
 }
 
 // DecodeEnvelope parses an event envelope and verifies that it carries an
