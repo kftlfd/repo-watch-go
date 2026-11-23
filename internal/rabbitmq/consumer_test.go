@@ -43,6 +43,7 @@ type fakeConsumerMetrics struct {
 	handled              []AckType
 	failures             int
 	defects              int
+	panics               int
 	requeues             int
 	retriesScheduled     []string
 	retriesExhausted     int
@@ -56,6 +57,7 @@ func (m *fakeConsumerMetrics) MessageHandled(_ string, ack AckType) {
 
 func (m *fakeConsumerMetrics) HandlerFailed(string)         { m.failures++ }
 func (m *fakeConsumerMetrics) HandlerDefectDetected(string) { m.defects++ }
+func (m *fakeConsumerMetrics) HandlerPanicked(string)       { m.panics++ }
 func (m *fakeConsumerMetrics) Requeued(string)              { m.requeues++ }
 func (m *fakeConsumerMetrics) RetryScheduled(_ string, tier string) {
 	m.retriesScheduled = append(m.retriesScheduled, tier)
@@ -211,6 +213,28 @@ func TestHandleDeliveryDelegatesToHandler(t *testing.T) {
 	require.Equal(t, 1, metrics.failures)
 	require.Zero(t, metrics.defects)
 	require.Equal(t, 1, metrics.requeues)
+}
+
+func TestHandleDeliveryRecoversHandlerPanic(t *testing.T) {
+	acknowledger := &fakeAcknowledger{}
+	metrics := &fakeConsumerMetrics{}
+	s := newTestSession(t, metrics, func(context.Context, events.Envelope) (AckType, error) {
+		panic("boom")
+	}, nil)
+
+	err := s.handleDelivery(
+		testDelivery(acknowledger, `{"id":"event-1","type":"repository.changed","payload":{}}`),
+	)
+
+	require.NoError(t, err)
+	require.False(t, acknowledger.nackCalled)
+	require.False(t, acknowledger.ackCalled)
+	require.True(t, acknowledger.rejectCalled)
+	require.False(t, acknowledger.rejectRequeue)
+	require.Equal(t, []AckType{NackDiscard}, metrics.handled)
+	require.Equal(t, 1, metrics.failures)
+	require.Equal(t, 1, metrics.panics)
+	require.Zero(t, metrics.requeues)
 }
 
 func TestHandleDeliverySchedulesFirstRetryTier(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
@@ -259,6 +260,34 @@ func isFatalConsumeError(err error) bool {
 	return false
 }
 
+// invokeHandler isolates a panicking handler to the current delivery. A panic
+// is a handler defect, not a transient failure, so the delivery is quarantined
+// immediately instead of running through the retry tiers.
+func (s *consumerSession) invokeHandler(
+	ctx context.Context,
+	msg events.Envelope,
+) (ack AckType, err error, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			ack = NackDiscard
+			err = fmt.Errorf("handler panic: %v", r)
+
+			s.metrics.HandlerPanicked(s.queueName)
+			s.logger.Error("event handler panicked",
+				"queue", s.queueName,
+				"event_id", msg.EventID,
+				"event_type", msg.EventType,
+				"panic", r,
+				"stack", string(debug.Stack()),
+			)
+		}
+	}()
+
+	ack, err = s.handler(ctx, msg)
+	return ack, err, false
+}
+
 func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 	logArgs := []any{
 		slog.String("queue", s.queueName),
@@ -282,9 +311,12 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 		ack = NackDiscard
 	} else {
 		handlerCtx, cancel := context.WithTimeout(s.ctx, s.cfg.HandlerTimeout)
-		ack, err = s.handler(handlerCtx, msg)
+		ack, err, panicked := s.invokeHandler(handlerCtx, msg)
 		cancel()
 
+		if panicked {
+			handlerStatus.defects = true
+		}
 		if ack == Ack && err != nil {
 			ack = NackRequeue
 			handlerStatus.defects = true

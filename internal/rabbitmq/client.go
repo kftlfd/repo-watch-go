@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -168,6 +169,21 @@ func (c *client) ensureTopology(conn *amqp091.Connection) error {
 }
 
 func (c *client) maintain() {
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.Error("rabbitmq maintainer panicked",
+				"panic", r,
+				"stack", string(debug.Stack()),
+			)
+
+			// Without the maintainer the client cannot recover. Shut the
+			// connection down so consumers leave consume, waitConn returns
+			// ErrClosed, and the service stops instead of running without
+			// reconnection.
+			c.shutdown()
+		}
+	}()
+
 	for {
 		var amqpErr *amqp091.Error
 
