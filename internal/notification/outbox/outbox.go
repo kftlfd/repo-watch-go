@@ -93,7 +93,7 @@ type notificationOutbox struct {
 	q *dbGen.Queries
 }
 
-func NewScannerOutbox(queries *dbGen.Queries) dispatcher.Store {
+func NewNotificationOutbox(queries *dbGen.Queries) dispatcher.Store {
 	return &notificationOutbox{q: queries}
 }
 

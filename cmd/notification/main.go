@@ -134,7 +134,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 
 	outboxDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherDeps{
 		Logger:    logger.With("module", "notification_outbox"),
-		Store:     outbox.NewScannerOutbox(queries),
+		Store:     outbox.NewNotificationOutbox(queries),
 		Publisher: rabbitPublisher,
 		Metrics:   dispatcher.NewMetrics(metricsReg),
 	})
