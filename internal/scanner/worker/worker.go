@@ -9,6 +9,9 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"repo-watch/internal/events"
 	"repo-watch/internal/github"
 	"repo-watch/internal/observability"
@@ -117,7 +120,16 @@ func (w *scannerWorker) fetchLatestTag(ctx context.Context, repo dbGen.Repositor
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		tag, err := w.gh.GetLatestReleaseTag(ctx, repo.Owner, repo.Name)
+		callCtx, span := observability.Tracer().Start(ctx, "github get latest release tag",
+			trace.WithSpanKind(trace.SpanKindClient),
+		)
+		tag, err := w.gh.GetLatestReleaseTag(callCtx, repo.Owner, repo.Name)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+
 		if err == nil {
 			return tag, nil
 		}
@@ -172,7 +184,19 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func (w *scannerWorker) DoScanIteration(ctx context.Context, correlationID string) error {
+func (w *scannerWorker) DoScanIteration(ctx context.Context, correlationID string) (err error) {
+	ctx, span := observability.Tracer().Start(ctx, "scan iteration",
+		trace.WithNewRoot(),
+		trace.WithAttributes(observability.Attr.CorrelationID(correlationID)),
+	)
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	w.logger.Info("new iteration", "correlation_id", correlationID)
 
 	batch, err := w.q.GetReposScanBatch(ctx, dbGen.GetReposScanBatchParams{
@@ -187,61 +211,92 @@ func (w *scannerWorker) DoScanIteration(ctx context.Context, correlationID strin
 	}
 
 	for _, repo := range batch {
-		latestTag, err := w.fetchLatestTag(ctx, repo)
+		if ctx.Err() != nil {
+			break
+		}
+
+		stopBatch, err := w.scanRepository(ctx, repo, correlationID)
 		if err != nil {
-			w.logger.Info("repo scan",
-				"repo", repo.ID,
-				"status", "gh error",
-				"err", err,
-				"correlation_id", correlationID,
-			)
-
-			if errors.Is(err, github.ErrNotFound) {
-				writeCtx, cancel := persistenceContext(ctx)
-				err := w.removeRepo(writeCtx, repo)
-				cancel()
-				if err != nil {
-					return err
-				}
-				continue
-			}
-
-			// A rate limit applies to the whole client, so stop this batch
-			// instead of immediately requesting every remaining repo.
-			if errors.Is(err, github.ErrRateLimit) {
-				w.logger.Info("stopping batch after github rate limit", "correlation_id", correlationID)
-				break
-			}
-
-			continue
+			return err
 		}
-
-		if repo.LatestSeenTag != latestTag {
-			w.logger.Info("repo scan",
-				"repo", repo.ID,
-				"status", "new release",
-				"tag", latestTag,
-				"correlation_id", correlationID,
-			)
-		} else {
-			w.logger.Info("repo scan",
-				"repo", repo.ID,
-				"status", "not changed",
-				"correlation_id", correlationID,
-			)
+		if stopBatch {
+			break
 		}
-
-		writeCtx, cancel := persistenceContext(ctx)
-		err = w.updateRepo(writeCtx, repo, latestTag)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("update error: %w", err)
-		}
-
-		w.met.ScanOk()
 	}
 
 	return nil
+}
+
+// scanRepository scans one repository and persists the result. It reports
+// stopBatch when a client-wide failure, such as a rate limit, means the rest
+// of the batch should wait for the next iteration.
+func (w *scannerWorker) scanRepository(
+	ctx context.Context,
+	repo dbGen.Repository,
+	correlationID string,
+) (stopBatch bool, err error) {
+	ctx, span := observability.Tracer().Start(ctx, "scan repository")
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
+	latestTag, err := w.fetchLatestTag(ctx, repo)
+	if err != nil {
+		w.logger.Info("repo scan",
+			"repo", repo.ID,
+			"status", "gh error",
+			"err", err,
+			"correlation_id", correlationID,
+		)
+
+		if errors.Is(err, github.ErrNotFound) {
+			writeCtx, cancel := persistenceContext(ctx)
+			removeErr := w.removeRepo(writeCtx, repo)
+			cancel()
+			if removeErr != nil {
+				return false, removeErr
+			}
+			return false, nil
+		}
+
+		// A rate limit applies to the whole client, so stop this batch
+		// instead of immediately requesting every remaining repo.
+		if errors.Is(err, github.ErrRateLimit) {
+			w.logger.Info("stopping batch after github rate limit", "correlation_id", correlationID)
+			return true, nil
+		}
+
+		return false, nil
+	}
+
+	if repo.LatestSeenTag != latestTag {
+		w.logger.Info("repo scan",
+			"repo", repo.ID,
+			"status", "new release",
+			"tag", latestTag,
+			"correlation_id", correlationID,
+		)
+	} else {
+		w.logger.Info("repo scan",
+			"repo", repo.ID,
+			"status", "not changed",
+			"correlation_id", correlationID,
+		)
+	}
+
+	writeCtx, cancel := persistenceContext(ctx)
+	updateErr := w.updateRepo(writeCtx, repo, latestTag)
+	cancel()
+	if updateErr != nil {
+		return false, fmt.Errorf("update error: %w", updateErr)
+	}
+
+	w.met.ScanOk()
+	return false, nil
 }
 
 func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, latestTag string) error {
@@ -281,10 +336,12 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, l
 				return fmt.Errorf("marshal outbox payload json: %w", err)
 			}
 
+			traceParent, _ := observability.GetTraceParent(ctx)
 			_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
 				EventType:     events.EventReleaseDetected,
 				EventVersion:  events.VersionReleaseDetected,
 				CorrelationID: observability.GetCorrelationID(ctx),
+				TraceParent:   traceParent,
 				Payload:       payload,
 			})
 			if err != nil {
@@ -334,10 +391,12 @@ func (w *scannerWorker) removeRepo(ctx context.Context, repo dbGen.Repository) e
 		return fmt.Errorf("marshal outbox payload json: %w", err)
 	}
 
+	traceParent, _ := observability.GetTraceParent(ctx)
 	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
 		EventType:     events.EventRepositoryRemoved,
 		EventVersion:  events.VersionRepositoryRemoved,
 		CorrelationID: observability.GetCorrelationID(ctx),
+		TraceParent:   traceParent,
 		Payload:       payload,
 	})
 	if err != nil {

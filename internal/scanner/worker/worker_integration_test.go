@@ -231,7 +231,7 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		gh := &fakeGithub{tag: "v1.0.0"}
 		w, metrics := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		err := w.DoScanIteration(t.Context())
+		err := w.DoScanIteration(t.Context(), "test-correlation")
 		require.ErrorContains(t, err, "mark repo processed")
 		require.Equal(t, 0, metrics.ok)
 
@@ -251,7 +251,7 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		require.NoError(t, err)
 		gh.tag = "v2.0.0"
 
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		require.NoError(t, w.DoScanIteration(t.Context(), "test-correlation"))
 		require.Equal(t, 1, metrics.ok)
 
 		tag, active = getRepoState(t, ctx, db.DB, repoID)
@@ -272,7 +272,7 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		gh := &fakeGithub{tag: "v2.0.0"}
 		w, metrics := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		err := w.DoScanIteration(t.Context())
+		err := w.DoScanIteration(t.Context(), "test-correlation")
 		require.ErrorContains(t, err, "commit repo update")
 		require.Equal(t, 0, metrics.ok)
 
@@ -297,7 +297,7 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		gh := &fakeGithub{err: github.ErrNotFound}
 		w, _ := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		err := w.DoScanIteration(t.Context())
+		err := w.DoScanIteration(t.Context(), "test-correlation")
 		require.ErrorContains(t, err, "mark repo inactive")
 
 		tag, active := getRepoState(t, ctx, db.DB, repoID)
@@ -317,7 +317,7 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		gh := &fakeGithub{err: github.ErrNotFound}
 		w, _ := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		err := w.DoScanIteration(t.Context())
+		err := w.DoScanIteration(t.Context(), "test-correlation")
 		require.ErrorContains(t, err, "commit repo removal")
 
 		tag, active := getRepoState(t, ctx, db.DB, repoID)
@@ -341,7 +341,9 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 
 		// The GitHub call returns successfully only after the iteration context
 		// has expired. Persistence must still commit.
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		iterCtx, cancel := context.WithTimeout(t.Context(), cfg.IterationTimeout)
+		defer cancel()
+		require.NoError(t, w.DoScanIteration(iterCtx, "test-correlation"))
 		require.Equal(t, 1, metrics.ok)
 
 		tag, active := getRepoState(t, ctx, db.DB, repoID)
@@ -363,7 +365,9 @@ func TestScannerWorkerTransactionFailures(t *testing.T) {
 		gh := &blockingGithub{err: github.ErrNotFound}
 		w, _ := newTestWorker(db.DB, db.Queries, gh, cfg)
 
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		iterCtx, cancel := context.WithTimeout(t.Context(), cfg.IterationTimeout)
+		defer cancel()
+		require.NoError(t, w.DoScanIteration(iterCtx, "test-correlation"))
 
 		tag, active := getRepoState(t, ctx, db.DB, repoID)
 		require.Equal(t, "v1.0.0", tag)
@@ -388,7 +392,7 @@ func TestScannerWorkerRemovalVersioning(t *testing.T) {
 		gh := &fakeGithub{err: github.ErrNotFound}
 		w, _ := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		require.NoError(t, w.DoScanIteration(t.Context(), "test-correlation"))
 
 		tag, active := getRepoState(t, ctx, db.DB, repoID)
 		require.Equal(t, "v1.0.0", tag)
@@ -453,7 +457,7 @@ func TestScannerWorkerRemovalVersioning(t *testing.T) {
 		})
 		w, _ := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		require.NoError(t, w.DoScanIteration(t.Context(), "test-correlation"))
 
 		tag, active := getRepoState(t, ctx, db.DB, repoID)
 		require.Equal(t, "v1.0.0", tag)
@@ -472,7 +476,7 @@ func TestScannerWorkerRemovalVersioning(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		require.NoError(t, w.DoScanIteration(t.Context(), "test-correlation"))
 
 		tag, active = getRepoState(t, ctx, db.DB, repoID)
 		require.Equal(t, "v1.0.0", tag)
@@ -581,7 +585,7 @@ func TestScannerWorkerGithubRetries(t *testing.T) {
 		})
 		w, metrics := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		require.NoError(t, w.DoScanIteration(t.Context(), "test-correlation"))
 		require.Equal(t, 2, calls)
 		require.Equal(t, 1, metrics.ok)
 
@@ -611,7 +615,7 @@ func TestScannerWorkerGithubRetries(t *testing.T) {
 		})
 		w, metrics := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		require.NoError(t, w.DoScanIteration(t.Context(), "test-correlation"))
 		require.Equal(t, 2, calls)
 		require.Equal(t, 1, metrics.ok)
 
@@ -631,7 +635,7 @@ func TestScannerWorkerGithubRetries(t *testing.T) {
 		})
 		w, metrics := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		require.NoError(t, w.DoScanIteration(t.Context(), "test-correlation"))
 		require.Equal(t, 1, calls)
 		require.Zero(t, metrics.ok)
 
@@ -645,7 +649,7 @@ func TestScannerWorkerGithubRetries(t *testing.T) {
 
 		// The repo lease is still active, so an immediate second iteration must
 		// not call GitHub again.
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		require.NoError(t, w.DoScanIteration(t.Context(), "test-correlation"))
 		require.Equal(t, 1, calls)
 	})
 
@@ -667,7 +671,7 @@ func TestScannerWorkerGithubRetries(t *testing.T) {
 		})
 		w, _ := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		require.NoError(t, w.DoScanIteration(t.Context(), "test-correlation"))
 		require.Equal(t, 1, calls)
 
 		for _, id := range []string{"owner/first", "owner/second"} {
@@ -692,7 +696,7 @@ func TestScannerWorkerGithubRetries(t *testing.T) {
 		})
 		w, metrics := newTestWorker(db.DB, db.Queries, gh, testConfig())
 
-		require.NoError(t, w.DoScanIteration(t.Context()))
+		require.NoError(t, w.DoScanIteration(t.Context(), "test-correlation"))
 		require.Equal(t, 3, calls)
 		require.Zero(t, metrics.ok)
 
