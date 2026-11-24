@@ -6,6 +6,12 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 )
 
+// StringHeader reads a string AMQP header.
+func StringHeader(headers amqp091.Table, key string) string {
+	value, _ := headers[key].(string)
+	return value
+}
+
 // Int32Header reads an integer AMQP header. Field tables can decode the same
 // logical value as different Go integer types depending on how it was encoded.
 func Int32Header(headers amqp091.Table, key string) int32 {

@@ -12,6 +12,7 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 
 	"repo-watch/internal/events"
+	"repo-watch/internal/observability"
 )
 
 type RabbitJSONPublisher interface {
@@ -77,11 +78,20 @@ func (p *publisher) PublishJSON(
 		correlationID = msg.EventID
 	}
 
+	headers := amqp091.Table{}
+	if traceParent, traceState := observability.GetTraceParent(ctx); traceParent != "" {
+		headers[observability.TraceParentHeader] = traceParent
+		if traceState != "" {
+			headers[observability.TraceStateHeader] = traceState
+		}
+	}
+
 	publishing := amqp091.Publishing{
 		ContentType:   "application/json",
 		DeliveryMode:  amqp091.Persistent,
 		MessageId:     msg.EventID,
 		CorrelationId: correlationID,
+		Headers:       headers,
 		Body:          body,
 	}
 

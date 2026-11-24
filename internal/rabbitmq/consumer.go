@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"repo-watch/internal/events"
 	"repo-watch/internal/observability"
@@ -274,14 +276,16 @@ func (s *consumerSession) invokeHandler(
 			err = fmt.Errorf("handler panic: %v", r)
 
 			s.metrics.HandlerPanicked(s.queueName)
-			s.logger.Error("event handler panicked",
+			logArgs := []any{
 				"queue", s.queueName,
 				"event_id", msg.EventID,
 				"event_type", msg.EventType,
 				"correlation_id", observability.GetCorrelationID(ctx),
 				"panic", r,
 				"stack", string(debug.Stack()),
-			)
+			}
+			logArgs = append(logArgs, observability.TraceLogAttrs(ctx)...)
+			s.logger.Error("event handler panicked", logArgs...)
 		}
 	}()
 
@@ -324,10 +328,30 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 
 		handlerCtx, cancel := context.WithTimeout(s.ctx, s.cfg.HandlerTimeout)
 		handlerCtx = observability.WithCorrelationID(handlerCtx, correlationID)
+		handlerCtx = observability.WithTraceParent(handlerCtx,
+			StringHeader(delivery.Headers, observability.TraceParentHeader),
+			StringHeader(delivery.Headers, observability.TraceStateHeader),
+		)
+
+		handlerCtx, span := observability.Tracer().Start(handlerCtx, "process "+msg.EventType,
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(
+				observability.Attr.MessagingOpProcess(),
+				observability.Attr.MessagingDestination(s.queueName),
+				observability.Attr.MessagingEventType(msg.EventType),
+				observability.Attr.MessagingEventID(msg.EventID),
+				observability.Attr.CorrelationID(correlationID),
+			),
+		)
+		defer span.End()
 
 		ack, err = s.invokeHandler(handlerCtx, msg)
 		cancel()
 
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
 		if ack == Ack && err != nil {
 			ack = NackRequeue
 			handlerStatus.defects = true
@@ -337,6 +361,7 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 			slog.String("event_id", msg.EventID),
 			slog.String("event_type", msg.EventType),
 		)
+		logArgs = append(logArgs, observability.TraceLogAttrs(handlerCtx)...)
 	}
 
 	if correlationID != "" {
