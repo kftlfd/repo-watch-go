@@ -20,6 +20,7 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 
 	"repo-watch/internal/events"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
 )
 
@@ -276,6 +277,12 @@ func replay(
 	// dead-lettered. A replay gets a fresh set of retry attempts; the replay
 	// count still prevents an endless replay loop.
 	delete(headers, rabbitmq.RetryCountHeader)
+
+	// A replay is a new operator-initiated action, possibly days after the
+	// original event. Drop the old trace context so the consumer starts a
+	// fresh trace instead of extending the original trace across the delay.
+	delete(headers, observability.TraceParentHeader)
+	delete(headers, observability.TraceStateHeader)
 
 	headers[rabbitmq.ReplayCountHeader] = attempt
 	headers["x-replayed-from"] = cfg.queue
