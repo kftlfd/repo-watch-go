@@ -2,10 +2,14 @@ package httpserver
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"repo-watch/internal/observability"
 )
@@ -14,7 +18,7 @@ const (
 	RequestIDHeader = "X-Request-ID"
 )
 
-func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
+func ObservabilityMiddleware(logger *slog.Logger, m Metrics, allowTraceparent bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		start := time.Now()
@@ -28,12 +32,34 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 		c.Header(RequestIDHeader, requestID)
 		ctx = observability.WithCorrelationID(ctx, requestID)
 
+		if allowTraceparent {
+			ctx = observability.WithTraceParent(ctx,
+				c.GetHeader(observability.TraceParentHeader),
+				c.GetHeader(observability.TraceStateHeader),
+			)
+		}
+
+		ctx, span := observability.Tracer().Start(ctx, strings.TrimSpace(fmt.Sprintf("HTTP %v %v", c.Request.Method, path)),
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(
+				observability.Attr.HTTPRequestMethod(c.Request.Method),
+				observability.Attr.HTTPRoute(path),
+				observability.Attr.CorrelationID(requestID),
+			),
+		)
+		defer span.End()
+
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
 
 		duration := time.Since(start)
 		status := c.Writer.Status()
+
+		span.SetAttributes(observability.Attr.HTTPResponseStatus(status))
+		if status >= 500 {
+			span.SetStatus(codes.Error, "server error")
+		}
 
 		attrs := []any{
 			slog.String("request_id", requestID),
@@ -57,7 +83,12 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 			} else {
 				attrs = append(attrs, slog.Any("error", last.Err))
 			}
+
+			span.RecordError(last.Err)
+			span.SetStatus(codes.Error, last.Err.Error())
 		}
+
+		attrs = append(attrs, observability.TraceLogAttrs(ctx)...)
 
 		m.HTTPRequest(c.Request.Method, path, status, duration)
 

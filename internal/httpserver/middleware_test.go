@@ -29,7 +29,7 @@ func newTestRouter(t *testing.T, register func(*gin.Engine)) (*gin.Engine, *byte
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	router := gin.New()
-	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}))
+	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, false))
 	router.Use(Recovery())
 	register(router)
 
