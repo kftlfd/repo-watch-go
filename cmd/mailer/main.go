@@ -32,6 +32,15 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		return fmt.Errorf("validate config: %w", err)
 	}
 
+	tracingShutdown, err := observability.SetupTracing(g.Ctx(), observability.TracingConfig{
+		ServiceName:  "mailer",
+		ErrorHandler: func(err error) { logger.Warn("tracer error", "error", err) },
+	})
+	if err != nil {
+		return fmt.Errorf("setup tracing: %w", err)
+	}
+	g.Cleanup(func() { _ = tracingShutdown() })
+
 	if !cfg.IsDev {
 		gin.SetMode(gin.ReleaseMode)
 	}

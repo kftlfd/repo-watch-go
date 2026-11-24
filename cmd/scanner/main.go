@@ -68,6 +68,15 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		return fmt.Errorf("validate config: %w", err)
 	}
 
+	tracingShutdown, err := observability.SetupTracing(g.Ctx(), observability.TracingConfig{
+		ServiceName:  "scanner",
+		ErrorHandler: func(err error) { logger.Warn("tracer error", "error", err) },
+	})
+	if err != nil {
+		return fmt.Errorf("setup tracing: %w", err)
+	}
+	g.Cleanup(func() { _ = tracingShutdown() })
+
 	if !cfg.IsDev {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -81,7 +90,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	db, err := postgres.Connect(ctx, cfg.Db, cfg.Db.AutoCreate, cfg.Db.AutoMigrate, migrations.MigrationsFS)
 	cancel()
 	if err != nil {
-		return err
+		return fmt.Errorf("connect postgres: %w", err)
 	}
 	g.Cleanup(func() { _ = db.Close() })
 
