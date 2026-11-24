@@ -16,16 +16,17 @@ import (
 
 const createOutboxRow = `-- name: CreateOutboxRow :one
 INSERT INTO
-    outbox (event_type, event_version, correlation_id, payload)
+    outbox (event_type, event_version, correlation_id, trace_parent, payload)
 VALUES
-    ($1, $2, $3, $4)
-RETURNING id, event_type, event_version, correlation_id, payload, created_at, leased_until, next_attempt_at, published_at, attempts, last_error, failed_at
+    ($1, $2, $3, $4, $5)
+RETURNING id, event_type, event_version, correlation_id, trace_parent, payload, created_at, leased_until, next_attempt_at, published_at, attempts, last_error, failed_at
 `
 
 type CreateOutboxRowParams struct {
 	EventType     string
 	EventVersion  int32
 	CorrelationID string
+	TraceParent   string
 	Payload       json.RawMessage
 }
 
@@ -34,6 +35,7 @@ func (q *Queries) CreateOutboxRow(ctx context.Context, arg CreateOutboxRowParams
 		arg.EventType,
 		arg.EventVersion,
 		arg.CorrelationID,
+		arg.TraceParent,
 		arg.Payload,
 	)
 	var i Outbox
@@ -42,6 +44,7 @@ func (q *Queries) CreateOutboxRow(ctx context.Context, arg CreateOutboxRowParams
 		&i.EventType,
 		&i.EventVersion,
 		&i.CorrelationID,
+		&i.TraceParent,
 		&i.Payload,
 		&i.CreatedAt,
 		&i.LeasedUntil,
@@ -83,7 +86,7 @@ UPDATE outbox
 SET leased_until = $2
 FROM candidates
 WHERE outbox.id = candidates.id
-RETURNING outbox.id, outbox.event_type, outbox.event_version, outbox.correlation_id, outbox.payload, outbox.created_at, outbox.leased_until, outbox.next_attempt_at, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
+RETURNING outbox.id, outbox.event_type, outbox.event_version, outbox.correlation_id, outbox.trace_parent, outbox.payload, outbox.created_at, outbox.leased_until, outbox.next_attempt_at, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
 `
 
 type GetOutboxBatchParams struct {
@@ -105,6 +108,7 @@ func (q *Queries) GetOutboxBatch(ctx context.Context, arg GetOutboxBatchParams) 
 			&i.EventType,
 			&i.EventVersion,
 			&i.CorrelationID,
+			&i.TraceParent,
 			&i.Payload,
 			&i.CreatedAt,
 			&i.LeasedUntil,

@@ -8,6 +8,9 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"repo-watch/internal/events"
 	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
@@ -29,6 +32,7 @@ type Row struct {
 	EventType     string
 	EventID       string
 	CorrelationID string
+	TraceParent   string
 	Version       int32
 	Payload       json.RawMessage
 	CreatedAt     time.Time
@@ -372,6 +376,19 @@ func (d *Dispatcher) publishRow(ctx context.Context, row Row) (published bool, t
 	}
 	ctx = observability.WithCorrelationID(ctx, row.CorrelationID)
 
+	ctx, span := observability.Tracer().Start(ctx, "publish "+row.EventType,
+		trace.WithNewRoot(),
+		trace.WithSpanKind(trace.SpanKindProducer),
+		observability.WithTraceLink(row.TraceParent),
+		trace.WithAttributes(
+			observability.Attr.MessagingOpSend(),
+			observability.Attr.MessagingEventType(row.EventType),
+			observability.Attr.MessagingEventID(row.EventID),
+			observability.Attr.CorrelationID(row.CorrelationID),
+		),
+	)
+	defer span.End()
+
 	err = d.pub.PublishJSON(ctx, events.Envelope{
 		EventID:       row.EventID,
 		EventType:     row.EventType,
@@ -384,6 +401,9 @@ func (d *Dispatcher) publishRow(ctx context.Context, row Row) (published bool, t
 	if err == nil {
 		return true, false, nil
 	}
+
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
 
 	if ctx.Err() != nil {
 		return false, false, ctx.Err()
@@ -402,14 +422,19 @@ func (d *Dispatcher) publishRow(ctx context.Context, row Row) (published bool, t
 
 	failure, recordErr := d.recordFailure(ctx, row, err.Error(), isTerminal, nextAttemptAt)
 	if recordErr != nil {
-		return false, false, fmt.Errorf("record event failure %q: %w", row.EventID, recordErr)
+		err := fmt.Errorf("record event failure %q: %w", row.EventID, recordErr)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return false, false, err
 	}
 	if failure.Terminal {
-		return false, true, fmt.Errorf("event %q exceeded %d attempts: %w", row.EventID, d.cfg.maxAttempts, err)
+		err := fmt.Errorf("event %q exceeded %d attempts: %w", row.EventID, d.cfg.maxAttempts, err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return false, true, err
 	}
 
-	d.logger.Error(
-		"outbox publish failed; retry scheduled",
+	logArgs := []any{
 		"outbox_id", row.ID,
 		"event_type", row.EventType,
 		"event_id", row.EventID,
@@ -417,7 +442,9 @@ func (d *Dispatcher) publishRow(ctx context.Context, row Row) (published bool, t
 		"attempt", failure.Attempts,
 		"next_attempt_at", nextAttemptAt,
 		"error", err,
-	)
+	}
+	logArgs = append(logArgs, observability.TraceLogAttrs(ctx)...)
+	d.logger.Error("outbox publish failed; retry scheduled", logArgs...)
 	d.metrics.Retry()
 
 	// The row is durably scheduled. It is not an iteration failure; a later

@@ -16,9 +16,9 @@ import (
 
 const createNewReleaseOutboxNotifications = `-- name: CreateNewReleaseOutboxNotifications :exec
 INSERT INTO outbox
-    (type, email, repository_id, tag, unsub_token, correlation_id, payload)
+    (type, email, repository_id, tag, unsub_token, correlation_id, trace_parent, payload)
 SELECT
-    'new_release', subscriptions.email, subscriptions.repository_id, $2, subscriptions.unsub_token, $4, $3
+    'new_release', subscriptions.email, subscriptions.repository_id, $2, subscriptions.unsub_token, $4, $5, $3
 FROM subscriptions
 WHERE subscriptions.repository_id = $1
     AND subscriptions.active = true
@@ -30,6 +30,7 @@ type CreateNewReleaseOutboxNotificationsParams struct {
 	Tag           string
 	Payload       json.RawMessage
 	CorrelationID string
+	TraceParent   string
 }
 
 func (q *Queries) CreateNewReleaseOutboxNotifications(ctx context.Context, arg CreateNewReleaseOutboxNotificationsParams) error {
@@ -38,6 +39,7 @@ func (q *Queries) CreateNewReleaseOutboxNotifications(ctx context.Context, arg C
 		arg.Tag,
 		arg.Payload,
 		arg.CorrelationID,
+		arg.TraceParent,
 	)
 	return err
 }
@@ -87,9 +89,9 @@ WITH subs AS (
     RETURNING email, unsub_token
 )
 INSERT INTO outbox
-    (type, email, repository_id, tag, unsub_token, correlation_id, payload)
+    (type, email, repository_id, tag, unsub_token, correlation_id, trace_parent, payload)
 SELECT
-    'repo_removed', subs.email, $1, $2, subs.unsub_token, $4, $3
+    'repo_removed', subs.email, $1, $2, subs.unsub_token, $4, $5, $3
 FROM subs
 `
 
@@ -98,6 +100,7 @@ type DeactivateSubsForRepoAndNotifySubsParams struct {
 	Tag           string
 	Payload       json.RawMessage
 	CorrelationID string
+	TraceParent   string
 }
 
 func (q *Queries) DeactivateSubsForRepoAndNotifySubs(ctx context.Context, arg DeactivateSubsForRepoAndNotifySubsParams) error {
@@ -106,6 +109,7 @@ func (q *Queries) DeactivateSubsForRepoAndNotifySubs(ctx context.Context, arg De
 		arg.Tag,
 		arg.Payload,
 		arg.CorrelationID,
+		arg.TraceParent,
 	)
 	return err
 }
@@ -126,7 +130,7 @@ UPDATE outbox
 SET leased_until = $2
 FROM candidates
 WHERE outbox.id = candidates.id
-RETURNING outbox.id, outbox.type, outbox.email, outbox.repository_id, outbox.tag, outbox.unsub_token, outbox.correlation_id, outbox.payload, outbox.created_at, outbox.leased_until, outbox.next_attempt_at, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
+RETURNING outbox.id, outbox.type, outbox.email, outbox.repository_id, outbox.tag, outbox.unsub_token, outbox.correlation_id, outbox.trace_parent, outbox.payload, outbox.created_at, outbox.leased_until, outbox.next_attempt_at, outbox.published_at, outbox.attempts, outbox.last_error, outbox.failed_at
 `
 
 type GetNotificationsBatchParams struct {
@@ -151,6 +155,7 @@ func (q *Queries) GetNotificationsBatch(ctx context.Context, arg GetNotification
 			&i.Tag,
 			&i.UnsubToken,
 			&i.CorrelationID,
+			&i.TraceParent,
 			&i.Payload,
 			&i.CreatedAt,
 			&i.LeasedUntil,

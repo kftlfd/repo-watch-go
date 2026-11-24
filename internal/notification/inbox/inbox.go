@@ -58,6 +58,7 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 	}
 
 	correlationID := observability.GetCorrelationID(ctx)
+	traceParent, _ := observability.GetTraceParent(ctx)
 
 	switch msg.EventType {
 
@@ -97,6 +98,7 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 				Tag:           ev.Tag,
 				Payload:       payload,
 				CorrelationID: correlationID,
+				TraceParent:   traceParent,
 			}); err != nil {
 				return fmt.Errorf("create notifications: %w", err)
 			}
@@ -118,6 +120,7 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 				Tag:           "repo_removed:" + msg.EventID,
 				Payload:       payload,
 				CorrelationID: correlationID,
+				TraceParent:   traceParent,
 			}); err != nil {
 				return fmt.Errorf("deactivate repo: %w", err)
 			}

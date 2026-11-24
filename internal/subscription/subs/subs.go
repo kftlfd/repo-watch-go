@@ -407,10 +407,13 @@ func saveToOutbox(ctx context.Context, qtx *dbGen.Queries, eventType string, eve
 		return fmt.Errorf("json marshal event: %w", err)
 	}
 
+	traceParent, _ := observability.GetTraceParent(ctx)
+
 	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
 		EventType:     eventType,
 		EventVersion:  eventVersion,
 		CorrelationID: observability.GetCorrelationID(ctx),
+		TraceParent:   traceParent,
 		Payload:       jsonData,
 	})
 

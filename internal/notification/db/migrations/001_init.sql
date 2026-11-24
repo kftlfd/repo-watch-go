@@ -31,6 +31,7 @@ CREATE TABLE outbox (
     tag TEXT NOT NULL,
     unsub_token TEXT NOT NULL,
     correlation_id TEXT NOT NULL DEFAULT '',
+    trace_parent TEXT NOT NULL DEFAULT '',
     payload JSONB NOT NULL,    
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     leased_until TIMESTAMPTZ,
