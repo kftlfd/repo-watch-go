@@ -160,3 +160,109 @@ groups:
         isPaused: false
         notification_settings:
           receiver: empty
+      - uid: rg4zoutboxdepth
+        title: Outbox backlog is deep
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: max by (job) (outbox_pending_events)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 100
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        annotations:
+          description: A dispatcher is falling behind producers. Check the affected service, database latency, and RabbitMQ publish latency
+          summary: An outbox has more than 100 pending events
+        labels:
+          severity: warning
+        isPaused: false
+        notification_settings:
+          receiver: empty
+      - uid: rg4zoutboxgrowth
+        title: Outbox backlog is growing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: deriv(max by (job) (outbox_pending_events)[15m:1m]) and on(job) (max by (job) (outbox_pending_events) > 10)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          description: Producers are outpacing the dispatcher even if individual events are not yet old. Check the affected service and dispatcher throughput
+          summary: An outbox backlog is growing
+        labels:
+          severity: warning
+        isPaused: false
+        notification_settings:
+          receiver: empty

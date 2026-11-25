@@ -12,8 +12,8 @@ import (
 	"repo-watch/internal/admin/ready"
 	"repo-watch/internal/app"
 	"repo-watch/internal/httpserver"
-	"repo-watch/internal/logger"
 	"repo-watch/internal/mailer"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
 )
 
@@ -22,7 +22,7 @@ func main() {
 
 	cfg := loadConfig()
 
-	logger := logger.NewLogger(cfg.LogLevel, "service", "mailer")
+	logger := observability.NewLogger(cfg.LogLevel, "service", "mailer")
 
 	app.Run(logger, cfg.run)
 }
@@ -31,6 +31,15 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	if err := cfg.validateConfig(); err != nil {
 		return fmt.Errorf("validate config: %w", err)
 	}
+
+	tracingShutdown, err := observability.SetupTracing(g.Ctx(), observability.TracingConfig{
+		ServiceName:  "mailer",
+		ErrorHandler: func(err error) { logger.Warn("tracer error", "error", err) },
+	})
+	if err != nil {
+		return fmt.Errorf("setup tracing: %w", err)
+	}
+	g.Cleanup(func() { _ = tracingShutdown() })
 
 	if !cfg.IsDev {
 		gin.SetMode(gin.ReleaseMode)

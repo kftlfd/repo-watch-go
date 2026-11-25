@@ -11,7 +11,7 @@ groups:
         data:
           - refId: A
             relativeTimeRange:
-              from: 600
+              from: 60
               to: 0
             datasourceUid: prometheus
             model:
@@ -51,8 +51,8 @@ groups:
         execErrState: Error
         for: 1m
         annotations:
-          summary: A service has lost its RabbitMQ connection
           description: Publishers and consumers may be unable to deliver or receive events
+          summary: A service has lost its RabbitMQ connection
         labels:
           severity: critical
         isPaused: false

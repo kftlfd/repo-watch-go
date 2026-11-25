@@ -9,8 +9,12 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"repo-watch/internal/events"
 	"repo-watch/internal/github"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/db/dbGen"
 )
@@ -73,8 +77,13 @@ func (w *scannerWorker) Start(ctx context.Context) error {
 	w.logger.Info("starting")
 
 	for {
-		if err := w.DoScanIteration(); err != nil {
-			w.logger.Error("scanner iteration error", "error", err)
+		iterCtx, cancel := context.WithTimeout(ctx, w.cfg.IterationTimeout)
+		correlationID := observability.NewCorrelationID()
+		iterCtx = observability.WithCorrelationID(iterCtx, correlationID)
+		err := w.DoScanIteration(iterCtx, correlationID)
+		cancel()
+
+		if err != nil {
 			w.met.ScanErr()
 		}
 
@@ -110,7 +119,21 @@ func (w *scannerWorker) fetchLatestTag(ctx context.Context, repo dbGen.Repositor
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		tag, err := w.gh.GetLatestReleaseTag(ctx, repo.Owner, repo.Name)
+		callCtx, span := observability.Tracer().Start(ctx, "github get latest release tag",
+			trace.WithSpanKind(trace.SpanKindClient),
+			trace.WithAttributes(
+				observability.Attr.RepositoryOwner(repo.Owner),
+				observability.Attr.RepositoryName(repo.Name),
+				observability.Attr.GithubAttempt(attempt),
+			),
+		)
+		tag, err := w.gh.GetLatestReleaseTag(callCtx, repo.Owner, repo.Name)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+
 		if err == nil {
 			return tag, nil
 		}
@@ -165,11 +188,25 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func (w *scannerWorker) DoScanIteration() error {
-	w.logger.Info("new iteration")
+func (w *scannerWorker) DoScanIteration(ctx context.Context, correlationID string) (err error) {
+	ctx, span := observability.Tracer().Start(ctx, "scan iteration",
+		trace.WithNewRoot(),
+		trace.WithAttributes(observability.Attr.CorrelationID(correlationID)),
+	)
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			logArgs := []any{"error", err, "correlation_id", correlationID}
+			logArgs = append(logArgs, observability.TraceLogAttrs(ctx)...)
+			w.logger.Error("scanner iteration error", logArgs...)
+		}
+		span.End()
+	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), w.cfg.IterationTimeout)
-	defer cancel()
+	logArgs := []any{"correlation_id", correlationID}
+	logArgs = append(logArgs, observability.TraceLogAttrs(ctx)...)
+	w.logger.Info("new iteration", logArgs...)
 
 	batch, err := w.q.GetReposScanBatch(ctx, dbGen.GetReposScanBatchParams{
 		Limit: w.cfg.BatchSize,
@@ -181,49 +218,104 @@ func (w *scannerWorker) DoScanIteration() error {
 	if err != nil {
 		return fmt.Errorf("get batch: %w", err)
 	}
+	span.SetAttributes(observability.Attr.ScannerBatchSize(len(batch)))
 
 	for _, repo := range batch {
-		latestTag, err := w.fetchLatestTag(ctx, repo)
+		if ctx.Err() != nil {
+			break
+		}
+
+		stopBatch, err := w.scanRepository(ctx, repo, correlationID)
 		if err != nil {
-			w.logger.Info("repo scan", "repo", repo.ID, "status", "gh error", "err", err)
-
-			if errors.Is(err, github.ErrNotFound) {
-				writeCtx, cancel := persistenceContext(ctx)
-				err := w.removeRepo(writeCtx, repo)
-				cancel()
-				if err != nil {
-					return err
-				}
-				continue
-			}
-
-			// A rate limit applies to the whole client, so stop this batch
-			// instead of immediately requesting every remaining repo.
-			if errors.Is(err, github.ErrRateLimit) {
-				w.logger.Info("stopping batch after github rate limit")
-				break
-			}
-
-			continue
+			return err
 		}
-
-		if repo.LatestSeenTag != latestTag {
-			w.logger.Info("repo scan", "repo", repo.ID, "status", "new release", "tag", latestTag)
-		} else {
-			w.logger.Info("repo scan", "repo", repo.ID, "status", "not changed")
+		if stopBatch {
+			break
 		}
-
-		writeCtx, cancel := persistenceContext(ctx)
-		err = w.updateRepo(writeCtx, repo, latestTag)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("update error: %w", err)
-		}
-
-		w.met.ScanOk()
 	}
 
 	return nil
+}
+
+// scanRepository scans one repository and persists the result. It reports
+// stopBatch when a client-wide failure, such as a rate limit, means the rest
+// of the batch should wait for the next iteration.
+func (w *scannerWorker) scanRepository(
+	ctx context.Context,
+	repo dbGen.Repository,
+	correlationID string,
+) (stopBatch bool, err error) {
+	ctx, span := observability.Tracer().Start(ctx, "scan repository",
+		trace.WithAttributes(
+			observability.Attr.RepositoryID(repo.ID),
+			observability.Attr.RepositoryOwner(repo.Owner),
+			observability.Attr.RepositoryName(repo.Name),
+		),
+	)
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
+	latestTag, err := w.fetchLatestTag(ctx, repo)
+	if err != nil {
+		logArgs := []any{
+			"repo", repo.ID,
+			"status", "gh error",
+			"err", err,
+			"correlation_id", correlationID,
+		}
+		logArgs = append(logArgs, observability.TraceLogAttrs(ctx)...)
+		w.logger.Info("repo scan", logArgs...)
+
+		if errors.Is(err, github.ErrNotFound) {
+			writeCtx, cancel := persistenceContext(ctx)
+			removeErr := w.removeRepo(writeCtx, repo)
+			cancel()
+			if removeErr != nil {
+				return false, removeErr
+			}
+			return false, nil
+		}
+
+		// A rate limit applies to the whole client, so stop this batch
+		// instead of immediately requesting every remaining repo.
+		if errors.Is(err, github.ErrRateLimit) {
+			logArgs := []any{"correlation_id", correlationID}
+			logArgs = append(logArgs, observability.TraceLogAttrs(ctx)...)
+			w.logger.Info("stopping batch after github rate limit", logArgs...)
+			return true, nil
+		}
+
+		return false, nil
+	}
+
+	span.SetAttributes(observability.Attr.ReleaseTag(latestTag))
+
+	logArgs := []any{
+		"repo", repo.ID,
+		"correlation_id", correlationID,
+	}
+	if repo.LatestSeenTag != latestTag {
+		logArgs = append(logArgs, "status", "new release", "tag", latestTag)
+	} else {
+		logArgs = append(logArgs, "status", "not changed")
+	}
+	logArgs = append(logArgs, observability.TraceLogAttrs(ctx)...)
+	w.logger.Info("repo scan", logArgs...)
+
+	writeCtx, cancel := persistenceContext(ctx)
+	updateErr := w.updateRepo(writeCtx, repo, latestTag)
+	cancel()
+	if updateErr != nil {
+		return false, fmt.Errorf("update error: %w", updateErr)
+	}
+
+	w.met.ScanOk()
+	return false, nil
 }
 
 func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, latestTag string) error {
@@ -263,10 +355,13 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, l
 				return fmt.Errorf("marshal outbox payload json: %w", err)
 			}
 
+			traceParent, _ := observability.GetTraceParent(ctx)
 			_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-				EventType:    events.EventReleaseDetected,
-				EventVersion: events.VersionReleaseDetected,
-				Payload:      payload,
+				EventType:     events.EventReleaseDetected,
+				EventVersion:  events.VersionReleaseDetected,
+				CorrelationID: observability.GetCorrelationID(ctx),
+				TraceParent:   traceParent,
+				Payload:       payload,
 			})
 			if err != nil {
 				return fmt.Errorf("insert into outbox: %w", err)
@@ -315,10 +410,13 @@ func (w *scannerWorker) removeRepo(ctx context.Context, repo dbGen.Repository) e
 		return fmt.Errorf("marshal outbox payload json: %w", err)
 	}
 
+	traceParent, _ := observability.GetTraceParent(ctx)
 	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-		EventType:    events.EventRepositoryRemoved,
-		EventVersion: events.VersionRepositoryRemoved,
-		Payload:      payload,
+		EventType:     events.EventRepositoryRemoved,
+		EventVersion:  events.VersionRepositoryRemoved,
+		CorrelationID: observability.GetCorrelationID(ctx),
+		TraceParent:   traceParent,
+		Payload:       payload,
 	})
 	if err != nil {
 		return fmt.Errorf("insert into outbox: %w", err)

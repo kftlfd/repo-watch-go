@@ -8,4 +8,4 @@
 *.md
 *.log
 Dockerfile
-docker-compose*.yml
+compose*.yml

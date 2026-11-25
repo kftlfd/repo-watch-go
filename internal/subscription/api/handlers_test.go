@@ -69,7 +69,7 @@ func newTestHandler(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer)
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	router := gin.New()
-	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}))
+	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}, false))
 	router.Use(httpserver.Recovery())
 
 	RegisterRoutes(router.Group("/api"), Deps{

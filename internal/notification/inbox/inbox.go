@@ -7,9 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"repo-watch/internal/events"
 	"repo-watch/internal/notification/db/dbGen"
 	"repo-watch/internal/notification/outbox"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
 )
 
@@ -56,6 +61,8 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 		return rabbitmq.NackDiscard, err
 	}
 
+	correlationID := observability.GetCorrelationID(ctx)
+
 	switch msg.EventType {
 
 	case events.EventSubscriptionChanged:
@@ -88,15 +95,29 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 		if err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("marshal payload: %w", err)
 		}
-		return w.processEvent(ctx, msg, func(ctx context.Context, q *dbGen.Queries) error {
-			if err := q.CreateNewReleaseOutboxNotifications(ctx, dbGen.CreateNewReleaseOutboxNotificationsParams{
-				RepositoryID: ev.RepositoryID,
-				Tag:          ev.Tag,
-				Payload:      payload,
-			}); err != nil {
-				return fmt.Errorf("create notifications: %w", err)
-			}
-			return nil
+		return w.withFanoutSpan(ctx, []attribute.KeyValue{
+			observability.Attr.MessagingEventType(msg.EventType),
+			observability.Attr.MessagingEventID(msg.EventID),
+			observability.Attr.CorrelationID(correlationID),
+			observability.Attr.RepositoryID(ev.RepositoryID),
+			observability.Attr.RepositoryOwner(ev.Owner),
+			observability.Attr.RepositoryName(ev.Name),
+			observability.Attr.ReleaseTag(ev.Tag),
+			observability.Attr.NotificationType("new_release"),
+		}, func(ctx context.Context) (rabbitmq.AckType, error) {
+			return w.processEvent(ctx, msg, func(ctx context.Context, q *dbGen.Queries) error {
+				traceParent, _ := observability.GetTraceParent(ctx)
+				if err := q.CreateNewReleaseOutboxNotifications(ctx, dbGen.CreateNewReleaseOutboxNotificationsParams{
+					RepositoryID:  ev.RepositoryID,
+					Tag:           ev.Tag,
+					Payload:       payload,
+					CorrelationID: correlationID,
+					TraceParent:   traceParent,
+				}); err != nil {
+					return fmt.Errorf("create notifications: %w", err)
+				}
+				return nil
+			})
 		})
 
 	case events.EventRepositoryRemoved:
@@ -108,21 +129,53 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 		if err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("marshal payload: %w", err)
 		}
-		return w.processEvent(ctx, msg, func(ctx context.Context, q *dbGen.Queries) error {
-			if err := q.DeactivateSubsForRepoAndNotifySubs(ctx, dbGen.DeactivateSubsForRepoAndNotifySubsParams{
-				RepositoryID: ev.RepositoryID,
-				Tag:          "repo_removed:" + msg.EventID,
-				Payload:      payload,
-			}); err != nil {
-				return fmt.Errorf("deactivate repo: %w", err)
-			}
-			return nil
+		return w.withFanoutSpan(ctx, []attribute.KeyValue{
+			observability.Attr.MessagingEventType(msg.EventType),
+			observability.Attr.MessagingEventID(msg.EventID),
+			observability.Attr.CorrelationID(correlationID),
+			observability.Attr.RepositoryID(ev.RepositoryID),
+			observability.Attr.RepositoryOwner(ev.Owner),
+			observability.Attr.RepositoryName(ev.Name),
+			observability.Attr.NotificationType("repo_removed"),
+		}, func(ctx context.Context) (rabbitmq.AckType, error) {
+			return w.processEvent(ctx, msg, func(ctx context.Context, q *dbGen.Queries) error {
+				traceParent, _ := observability.GetTraceParent(ctx)
+				if err := q.DeactivateSubsForRepoAndNotifySubs(ctx, dbGen.DeactivateSubsForRepoAndNotifySubsParams{
+					RepositoryID:  ev.RepositoryID,
+					Tag:           "repo_removed:" + msg.EventID,
+					Payload:       payload,
+					CorrelationID: correlationID,
+					TraceParent:   traceParent,
+				}); err != nil {
+					return fmt.Errorf("deactivate repo: %w", err)
+				}
+				return nil
+			})
 		})
 
 	default:
 		return rabbitmq.NackDiscard, fmt.Errorf("unexpected event type %q", msg.EventType)
 
 	}
+}
+
+func (w *inboxWorker) withFanoutSpan(
+	ctx context.Context,
+	attrs []attribute.KeyValue,
+	fn func(context.Context) (rabbitmq.AckType, error),
+) (rabbitmq.AckType, error) {
+	ctx, span := observability.Tracer().Start(ctx, "notification fan-out",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attrs...),
+	)
+	defer span.End()
+
+	ack, err := fn(ctx)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return ack, err
 }
 
 func (w *inboxWorker) processEvent(

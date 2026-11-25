@@ -9,6 +9,16 @@ services:
     extra_hosts:
       - host.docker.internal:host-gateway
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.76.0
+    environment:
+      MEMORY_MAX_TRACES: "100000" # Bound the in-memory store
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "14269:14269" # admin and Prometheus metrics
+
   grafana:
     image: grafana/grafana:13.2-slim
     ports:

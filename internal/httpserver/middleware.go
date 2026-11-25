@@ -1,42 +1,78 @@
 package httpserver
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"log/slog"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	"repo-watch/internal/observability"
 )
 
 const (
 	RequestIDHeader = "X-Request-ID"
-	requestIDKey    = "request_id"
 )
 
-func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
+func ObservabilityMiddleware(logger *slog.Logger, m Metrics, allowTraceparent bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx := c.Request.Context()
 		start := time.Now()
 		path := c.FullPath()
 		query := c.Request.URL.RawQuery
 
-		requestID := strings.TrimSpace(c.GetHeader(RequestIDHeader))
+		requestID := observability.NormalizeCorrelationID(c.GetHeader(RequestIDHeader))
 		if requestID == "" {
-			requestID = newRequestID()
+			requestID = observability.NewCorrelationID()
 		}
-		c.Set(requestIDKey, requestID)
 		c.Header(RequestIDHeader, requestID)
+		ctx = observability.WithCorrelationID(ctx, requestID)
+
+		if allowTraceparent {
+			ctx = observability.WithTraceParent(ctx,
+				c.GetHeader(observability.TraceParentHeader),
+				c.GetHeader(observability.TraceStateHeader),
+			)
+		}
+
+		spanName := "HTTP " + c.Request.Method
+		if path != "" {
+			spanName += " " + path
+		} else {
+			spanName += " unmatched"
+		}
+		spanAttrs := []attribute.KeyValue{
+			observability.Attr.HTTPRequestMethod(c.Request.Method),
+			observability.Attr.URLPath(c.Request.URL.Path),
+			observability.Attr.CorrelationID(requestID),
+		}
+		if path != "" {
+			spanAttrs = append(spanAttrs, observability.Attr.HTTPRoute(path))
+		}
+		ctx, span := observability.Tracer().Start(ctx, spanName,
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(spanAttrs...),
+		)
+		defer span.End()
+
+		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
 
 		duration := time.Since(start)
 		status := c.Writer.Status()
 
+		span.SetAttributes(observability.Attr.HTTPResponseStatus(status))
+		if status >= 500 {
+			span.SetStatus(codes.Error, "server error")
+		}
+
 		attrs := []any{
 			slog.String("request_id", requestID),
+			slog.String("correlation_id", requestID),
 			slog.String("method", c.Request.Method),
 			slog.String("path", path),
 			slog.String("query", query),
@@ -56,7 +92,12 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 			} else {
 				attrs = append(attrs, slog.Any("error", last.Err))
 			}
+
+			span.RecordError(last.Err)
+			span.SetStatus(codes.Error, last.Err.Error())
 		}
+
+		attrs = append(attrs, observability.TraceLogAttrs(ctx)...)
 
 		m.HTTPRequest(c.Request.Method, path, status, duration)
 
@@ -69,13 +110,4 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics) gin.HandlerFunc {
 			logger.Info("request", attrs...)
 		}
 	}
-}
-
-func newRequestID() string {
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
-	}
-
-	return hex.EncodeToString(buf[:])
 }

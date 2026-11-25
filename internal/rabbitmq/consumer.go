@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"repo-watch/internal/events"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/utils"
 )
 
@@ -266,26 +269,27 @@ func isFatalConsumeError(err error) bool {
 func (s *consumerSession) invokeHandler(
 	ctx context.Context,
 	msg events.Envelope,
-) (ack AckType, err error, panicked bool) {
+) (ack AckType, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			panicked = true
 			ack = NackDiscard
 			err = fmt.Errorf("handler panic: %v", r)
 
 			s.metrics.HandlerPanicked(s.queueName)
-			s.logger.Error("event handler panicked",
+			logArgs := []any{
 				"queue", s.queueName,
 				"event_id", msg.EventID,
 				"event_type", msg.EventType,
+				"correlation_id", observability.GetCorrelationID(ctx),
 				"panic", r,
 				"stack", string(debug.Stack()),
-			)
+			}
+			logArgs = append(logArgs, observability.TraceLogAttrs(ctx)...)
+			s.logger.Error("event handler panicked", logArgs...)
 		}
 	}()
 
-	ack, err = s.handler(ctx, msg)
-	return ack, err, false
+	return s.handler(ctx, msg)
 }
 
 func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
@@ -306,16 +310,48 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 		invalidAck bool
 	}
 
+	correlationID := delivery.CorrelationId
+
 	msg, err = events.DecodeEnvelope(delivery.Body)
 	if err != nil {
+		if correlationID == "" {
+			correlationID = delivery.MessageId
+		}
 		ack = NackDiscard
 	} else {
+		if correlationID == "" {
+			correlationID = msg.CorrelationID
+		}
+		if correlationID == "" {
+			correlationID = msg.EventID
+		}
+
 		handlerCtx, cancel := context.WithTimeout(s.ctx, s.cfg.HandlerTimeout)
-		ack, err, panicked := s.invokeHandler(handlerCtx, msg)
+		handlerCtx = observability.WithCorrelationID(handlerCtx, correlationID)
+		handlerCtx = observability.WithTraceParent(handlerCtx,
+			StringHeader(delivery.Headers, observability.TraceParentHeader),
+			StringHeader(delivery.Headers, observability.TraceStateHeader),
+		)
+
+		handlerCtx, span := observability.Tracer().Start(handlerCtx, "process "+msg.EventType,
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(
+				observability.Attr.MessagingSystem("rabbitmq"),
+				observability.Attr.MessagingOpProcess(),
+				observability.Attr.MessagingDestination(s.queueName),
+				observability.Attr.MessagingEventType(msg.EventType),
+				observability.Attr.MessagingEventID(msg.EventID),
+				observability.Attr.CorrelationID(correlationID),
+			),
+		)
+		defer span.End()
+
+		ack, err = s.invokeHandler(handlerCtx, msg)
 		cancel()
 
-		if panicked {
-			handlerStatus.defects = true
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 		}
 		if ack == Ack && err != nil {
 			ack = NackRequeue
@@ -326,6 +362,11 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 			slog.String("event_id", msg.EventID),
 			slog.String("event_type", msg.EventType),
 		)
+		logArgs = append(logArgs, observability.TraceLogAttrs(handlerCtx)...)
+	}
+
+	if correlationID != "" {
+		logArgs = append(logArgs, slog.String("correlation_id", correlationID))
 	}
 
 	if err != nil {

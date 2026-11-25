@@ -256,6 +256,24 @@ func TestRunIterationPublishesBatch(t *testing.T) {
 	require.Equal(t, 2, metrics.published)
 }
 
+func TestRunIterationPropagatesCorrelationID(t *testing.T) {
+	withCorrelation := testRow(1)
+	withCorrelation.CorrelationID = "corr-1"
+
+	withoutCorrelation := testRow(2)
+
+	store := &fakeStore{rows: []Row{withCorrelation, withoutCorrelation}}
+	pub := &fakePublisher{}
+	d := newTestDispatcher(t, store, pub, testConfig(), &fakeMetrics{})
+
+	_, err := d.runIteration(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, pub.calls, 2)
+	require.Equal(t, "corr-1", pub.calls[0].CorrelationID)
+	require.Equal(t, "event-2", pub.calls[1].CorrelationID)
+}
+
 func TestRunIterationMarksOnlySuccessfullyPublishedIDs(t *testing.T) {
 	cfg := testConfig()
 	cfg.MaxAttempts = ptr(int32(1))

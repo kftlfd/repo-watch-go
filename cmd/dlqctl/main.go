@@ -20,6 +20,7 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 
 	"repo-watch/internal/events"
+	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
 )
 
@@ -254,7 +255,8 @@ func handleDelivery(
 		return resultReplayed, fmt.Errorf("ack replayed message: %w", err)
 	}
 
-	fmt.Printf("replayed id=%s type=%s attempt=%d\n", envelope.EventID, envelope.EventType, replays+1)
+	fmt.Printf("replayed id=%s type=%s correlation_id=%s attempt=%d\n",
+		envelope.EventID, envelope.EventType, delivery.CorrelationId, replays+1)
 	return resultReplayed, nil
 }
 
@@ -276,16 +278,27 @@ func replay(
 	// count still prevents an endless replay loop.
 	delete(headers, rabbitmq.RetryCountHeader)
 
+	// A replay is a new operator-initiated action, possibly days after the
+	// original event. Drop the old trace context so the consumer starts a
+	// fresh trace instead of extending the original trace across the delay.
+	delete(headers, observability.TraceParentHeader)
+	delete(headers, observability.TraceStateHeader)
+
 	headers[rabbitmq.ReplayCountHeader] = attempt
 	headers["x-replayed-from"] = cfg.queue
 	headers["x-replayed-at"] = time.Now().UTC().Format(time.RFC3339)
+
+	correlationID := delivery.CorrelationId
+	if correlationID == "" {
+		correlationID = envelope.CorrelationID
+	}
 
 	msg := amqp091.Publishing{
 		ContentType:   "application/json",
 		DeliveryMode:  amqp091.Persistent,
 		MessageId:     envelope.EventID,
 		Timestamp:     time.Now(),
-		CorrelationId: delivery.CorrelationId,
+		CorrelationId: correlationID,
 		Headers:       headers,
 		Body:          delivery.Body,
 	}
@@ -307,10 +320,16 @@ func previewMessage(delivery *amqp091.Delivery) {
 	policy := events.ReplayPolicyFor(envelope.EventType)
 	unsafe := policy.Unsafe
 
+	correlationID := delivery.CorrelationId
+	if correlationID == "" {
+		correlationID = envelope.CorrelationID
+	}
+
 	fmt.Printf(
-		"id=%s type=%s version=%d replay=%d unsafe=%t routing_key=%s deaths=%v",
+		"id=%s type=%s correlation_id=%s version=%d replay=%d unsafe=%t routing_key=%s deaths=%v",
 		envelope.EventID,
 		envelope.EventType,
+		correlationID,
 		envelope.Version,
 		rabbitmq.Int32Header(delivery.Headers, rabbitmq.ReplayCountHeader),
 		unsafe,

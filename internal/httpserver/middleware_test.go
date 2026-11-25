@@ -12,6 +12,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+
+	"repo-watch/internal/observability"
 )
 
 type fakeMetrics struct{}
@@ -27,11 +29,31 @@ func newTestRouter(t *testing.T, register func(*gin.Engine)) (*gin.Engine, *byte
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	router := gin.New()
-	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}))
+	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, false))
 	router.Use(Recovery())
 	register(router)
 
 	return router, logs
+}
+
+func TestObservabilityMiddlewarePropagatesCorrelationID(t *testing.T) {
+	var got string
+
+	router, _ := newTestRouter(t, func(r *gin.Engine) {
+		r.GET("/correlation", func(c *gin.Context) {
+			got = observability.GetCorrelationID(c.Request.Context())
+			c.Status(http.StatusOK)
+		})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/correlation", nil)
+	req.Header.Set(RequestIDHeader, "client-request-1")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "client-request-1", got)
 }
 
 func TestObservabilityMiddlewareLogsRecordedError(t *testing.T) {
