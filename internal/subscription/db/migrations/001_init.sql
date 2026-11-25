@@ -72,7 +72,7 @@ CREATE TABLE user_tokens (
 
 CREATE INDEX user_tokens_created_at_idx ON user_tokens (created_at);
 
-CREATE TABLE tokens (
+CREATE TABLE subscription_tokens (
     id SERIAL PRIMARY KEY,
     subscription_id INTEGER NOT NULL REFERENCES subscriptions (id),
     token_type TEXT NOT NULL,
@@ -81,11 +81,11 @@ CREATE TABLE tokens (
     UNIQUE (subscription_id, token_type)
 );
 
-CREATE INDEX tokens_confirm_created_at_idx ON tokens (created_at)
+CREATE INDEX subscription_tokens_confirm_created_at_idx ON subscription_tokens (created_at)
 WHERE
     token_type = 'confirm';
 
-CREATE INDEX tokens_unsub_created_at_idx ON tokens (created_at)
+CREATE INDEX subscription_tokens_unsub_created_at_idx ON subscription_tokens (created_at)
 WHERE
     token_type = 'unsub';
 
@@ -145,11 +145,11 @@ DROP INDEX IF EXISTS processed_events_processed_at_idx;
 
 DROP TABLE IF EXISTS processed_events;
 
-DROP INDEX IF EXISTS tokens_unsub_created_at_idx;
+DROP INDEX IF EXISTS subscription_tokens_unsub_created_at_idx;
 
-DROP INDEX IF EXISTS tokens_confirm_created_at_idx;
+DROP INDEX IF EXISTS subscription_tokens_confirm_created_at_idx;
 
-DROP TABLE IF EXISTS tokens;
+DROP TABLE IF EXISTS subscription_tokens;
 
 DROP INDEX IF EXISTS user_tokens_created_at_idx;
 

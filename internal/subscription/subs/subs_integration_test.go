@@ -85,7 +85,7 @@ func TestCreateSubscription(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, false, dbSub.Active)
 
-	_, err = db.Queries.GetToken(ctx, dbGen.GetTokenParams{
+	_, err = db.Queries.GetSubscriptionToken(ctx, dbGen.GetSubscriptionTokenParams{
 		SubscriptionID: dbSub.ID,
 		TokenType:      subs.TokenTypeConfirm,
 	})
@@ -219,7 +219,7 @@ func createPendingSubscription(t *testing.T, ctx context.Context, db *testDB, sv
 	token, err := queuedConfirmToken(t, ctx, db, email)
 	require.NoError(t, err)
 
-	stored, err := db.Queries.GetToken(ctx, dbGen.GetTokenParams{
+	stored, err := db.Queries.GetSubscriptionToken(ctx, dbGen.GetSubscriptionTokenParams{
 		SubscriptionID: dbSub.ID,
 		TokenType:      subs.TokenTypeConfirm,
 	})
@@ -333,7 +333,7 @@ func TestCreateSubscriptionReplacesExistingConfirmToken(t *testing.T) {
 
 	require.NotEqual(t, firstToken, secondToken)
 
-	_, err := db.Queries.FindToken(ctx, dbGen.FindTokenParams{
+	_, err := db.Queries.FindSubscriptionToken(ctx, dbGen.FindSubscriptionTokenParams{
 		TokenType: subs.TokenTypeConfirm,
 		TokenHash: securetoken.Hash(firstToken),
 	})
@@ -351,7 +351,7 @@ func TestConfirmSubscriptionRejectsAlreadyActive(t *testing.T) {
 	unsubToken := confirmSubscription(t, ctx, db, svc, confirmToken)
 
 	newToken := "new-confirm-token"
-	_, err := db.Queries.UpsertToken(ctx, dbGen.UpsertTokenParams{
+	_, err := db.Queries.UpsertSubscriptionToken(ctx, dbGen.UpsertSubscriptionTokenParams{
 		SubscriptionID: sub.ID,
 		TokenType:      subs.TokenTypeConfirm,
 		TokenHash:      securetoken.Hash(newToken),
@@ -381,7 +381,7 @@ func TestConfirmSubscriptionRejectsAlreadyActive(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, emailsBefore, emailsAfter)
 
-	storedUnsub, err := db.Queries.GetToken(ctx, dbGen.GetTokenParams{
+	storedUnsub, err := db.Queries.GetSubscriptionToken(ctx, dbGen.GetSubscriptionTokenParams{
 		SubscriptionID: sub.ID,
 		TokenType:      subs.TokenTypeUnsub,
 	})

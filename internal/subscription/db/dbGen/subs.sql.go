@@ -67,28 +67,6 @@ func (q *Queries) CreateSubscription(ctx context.Context, arg CreateSubscription
 	return i, err
 }
 
-const deactivateSubsForRepoAndRemoveTokens = `-- name: DeactivateSubsForRepoAndRemoveTokens :exec
-WITH removed_subs as (
-    UPDATE subscriptions
-    SET
-        active = false,
-        active_version = active_version + 1,
-        updated_at = now()
-    WHERE repository_id = $1
-        AND active = true
-    RETURNING id
-)
-DELETE FROM tokens
-WHERE subscription_id IN (
-    SELECT id FROM removed_subs
-)
-`
-
-func (q *Queries) DeactivateSubsForRepoAndRemoveTokens(ctx context.Context, repositoryID string) error {
-	_, err := q.db.ExecContext(ctx, deactivateSubsForRepoAndRemoveTokens, repositoryID)
-	return err
-}
-
 const deactivateSubscription = `-- name: DeactivateSubscription :one
 UPDATE subscriptions
 SET
@@ -116,6 +94,28 @@ func (q *Queries) DeactivateSubscription(ctx context.Context, id int32) (Subscri
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deactivateSubscriptionsForRepoAndRemoveSubscriptionTokens = `-- name: DeactivateSubscriptionsForRepoAndRemoveSubscriptionTokens :exec
+WITH removed_subs as (
+    UPDATE subscriptions
+    SET
+        active = false,
+        active_version = active_version + 1,
+        updated_at = now()
+    WHERE repository_id = $1
+        AND active = true
+    RETURNING id
+)
+DELETE FROM subscription_tokens
+WHERE subscription_id IN (
+    SELECT id FROM removed_subs
+)
+`
+
+func (q *Queries) DeactivateSubscriptionsForRepoAndRemoveSubscriptionTokens(ctx context.Context, repositoryID string) error {
+	_, err := q.db.ExecContext(ctx, deactivateSubscriptionsForRepoAndRemoveSubscriptionTokens, repositoryID)
+	return err
 }
 
 const getSubscription = `-- name: GetSubscription :one

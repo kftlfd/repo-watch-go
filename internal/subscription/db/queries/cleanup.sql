@@ -1,10 +1,10 @@
--- name: DeleteExpiredConfirmTokens :execrows
-DELETE FROM tokens
+-- name: DeleteExpiredSubscriptionConfirmTokens :execrows
+DELETE FROM subscription_tokens
 WHERE token_type = 'confirm'
     AND created_at < @cutoff::timestamptz;
 
--- name: DeleteOrphanedUnsubTokens :execrows
-DELETE FROM tokens AS t
+-- name: DeleteOrphanedSubscriptionUnsubTokens :execrows
+DELETE FROM subscription_tokens AS t
 USING subscriptions AS s
 WHERE t.subscription_id = s.id
     AND t.token_type = 'unsub'

@@ -23,7 +23,7 @@ func CreateCleanupTasks(queries *dbGen.Queries, now func() time.Time) []taskrunn
 		{
 			Name: "cleanup expired confirm tokens",
 			Do: func(ctx context.Context) error {
-				_, err := queries.DeleteExpiredConfirmTokens(ctx, now().Add(-tokenRetention))
+				_, err := queries.DeleteExpiredSubscriptionConfirmTokens(ctx, now().Add(-tokenRetention))
 				return err
 			},
 		},
@@ -44,7 +44,7 @@ func CreateCleanupTasks(queries *dbGen.Queries, now func() time.Time) []taskrunn
 		{
 			Name: "cleanup orphaned unsub tokens",
 			Do: func(ctx context.Context) error {
-				_, err := queries.DeleteOrphanedUnsubTokens(ctx, now().Add(-orphanedUnsubTokenRetention))
+				_, err := queries.DeleteOrphanedSubscriptionUnsubTokens(ctx, now().Add(-orphanedUnsubTokenRetention))
 				return err
 			},
 		},

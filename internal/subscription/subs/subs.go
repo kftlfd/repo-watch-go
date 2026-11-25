@@ -123,7 +123,7 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return err
 	}
 
-	_, err = qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
+	_, err = qtx.UpsertSubscriptionToken(ctx, dbGen.UpsertSubscriptionTokenParams{
 		SubscriptionID: dbSub.ID,
 		TokenType:      TokenTypeConfirm,
 		TokenHash:      hashToken(tokenVal),
@@ -167,7 +167,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 
 	qtx := s.q.WithTx(tx)
 
-	t, err := qtx.FindTokenWDateForUpdate(ctx, dbGen.FindTokenWDateForUpdateParams{
+	t, err := qtx.FindSubscriptionTokenWDateForUpdate(ctx, dbGen.FindSubscriptionTokenWDateForUpdateParams{
 		TokenType: TokenTypeConfirm,
 		TokenHash: hashToken(token),
 		CreatedAt: time.Now().Add(-ConfirmTokenValidity),
@@ -183,7 +183,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 
 	updSub, err := qtx.ActivateSubscription(ctx, sub.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		if err = qtx.DeleteTokensBySubscriptionAndType(ctx, dbGen.DeleteTokensBySubscriptionAndTypeParams{
+		if err = qtx.DeleteSubscriptionTokensBySubIDAndType(ctx, dbGen.DeleteSubscriptionTokensBySubIDAndTypeParams{
 			SubscriptionID: sub.ID,
 			TokenType:      TokenTypeConfirm,
 		}); err != nil {
@@ -198,7 +198,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	if err = qtx.DeleteTokensBySubscription(ctx, sub.ID); err != nil {
+	if err = qtx.DeleteSubscriptionTokensBySubID(ctx, sub.ID); err != nil {
 		return err
 	}
 
@@ -207,7 +207,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	_, err = qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
+	_, err = qtx.UpsertSubscriptionToken(ctx, dbGen.UpsertSubscriptionTokenParams{
 		SubscriptionID: sub.ID,
 		TokenType:      TokenTypeUnsub,
 		TokenHash:      hashToken(unsubTokenVal),
@@ -287,7 +287,7 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 
 	qtx := s.q.WithTx(tx)
 
-	t, err := qtx.FindTokenForUpdate(ctx, dbGen.FindTokenForUpdateParams{
+	t, err := qtx.FindSubscriptionTokenForUpdate(ctx, dbGen.FindSubscriptionTokenForUpdateParams{
 		TokenType: TokenTypeUnsub,
 		TokenHash: hashToken(token),
 	})
@@ -302,7 +302,7 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 
 	updSub, err := qtx.DeactivateSubscription(ctx, sub.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		if err = qtx.DeleteTokensBySubscriptionAndType(ctx, dbGen.DeleteTokensBySubscriptionAndTypeParams{
+		if err = qtx.DeleteSubscriptionTokensBySubIDAndType(ctx, dbGen.DeleteSubscriptionTokensBySubIDAndTypeParams{
 			SubscriptionID: sub.ID,
 			TokenType:      TokenTypeUnsub,
 		}); err != nil {
@@ -317,7 +317,7 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	if err = qtx.DeleteTokensBySubscription(ctx, sub.ID); err != nil {
+	if err = qtx.DeleteSubscriptionTokensBySubID(ctx, sub.ID); err != nil {
 		return err
 	}
 

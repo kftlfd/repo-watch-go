@@ -10,14 +10,14 @@ import (
 	"time"
 )
 
-const deleteExpiredConfirmTokens = `-- name: DeleteExpiredConfirmTokens :execrows
-DELETE FROM tokens
+const deleteExpiredSubscriptionConfirmTokens = `-- name: DeleteExpiredSubscriptionConfirmTokens :execrows
+DELETE FROM subscription_tokens
 WHERE token_type = 'confirm'
     AND created_at < $1::timestamptz
 `
 
-func (q *Queries) DeleteExpiredConfirmTokens(ctx context.Context, cutoff time.Time) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteExpiredConfirmTokens, cutoff)
+func (q *Queries) DeleteExpiredSubscriptionConfirmTokens(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteExpiredSubscriptionConfirmTokens, cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -38,8 +38,8 @@ func (q *Queries) DeleteFailedOutbox(ctx context.Context, cutoff time.Time) (int
 	return result.RowsAffected()
 }
 
-const deleteOrphanedUnsubTokens = `-- name: DeleteOrphanedUnsubTokens :execrows
-DELETE FROM tokens AS t
+const deleteOrphanedSubscriptionUnsubTokens = `-- name: DeleteOrphanedSubscriptionUnsubTokens :execrows
+DELETE FROM subscription_tokens AS t
 USING subscriptions AS s
 WHERE t.subscription_id = s.id
     AND t.token_type = 'unsub'
@@ -47,8 +47,8 @@ WHERE t.subscription_id = s.id
     AND s.active = false
 `
 
-func (q *Queries) DeleteOrphanedUnsubTokens(ctx context.Context, cutoff time.Time) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteOrphanedUnsubTokens, cutoff)
+func (q *Queries) DeleteOrphanedSubscriptionUnsubTokens(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteOrphanedSubscriptionUnsubTokens, cutoff)
 	if err != nil {
 		return 0, err
 	}

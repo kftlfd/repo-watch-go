@@ -1,5 +1,5 @@
--- name: UpsertToken :one
-INSERT INTO tokens
+-- name: UpsertSubscriptionToken :one
+INSERT INTO subscription_tokens
     (subscription_id, token_type, token_hash)
 VALUES
     ($1, $2, $3)
@@ -9,45 +9,45 @@ SET
     created_at = now()
 RETURNING *;
 
--- name: GetToken :one
+-- name: GetSubscriptionToken :one
 SELECT *
-FROM tokens
+FROM subscription_tokens
 WHERE subscription_id = $1
     AND token_type = $2;
 
--- name: FindToken :one
+-- name: FindSubscriptionToken :one
 SELECT *
-FROM tokens
+FROM subscription_tokens
 WHERE token_type = $1
     AND token_hash = $2;
 
--- name: FindTokenForUpdate :one
+-- name: FindSubscriptionTokenForUpdate :one
 SELECT *
-FROM tokens
+FROM subscription_tokens
 WHERE token_type = $1
     AND token_hash = $2
 FOR UPDATE;
 
--- name: FindTokenWDate :one
+-- name: FindSubscriptionTokenWDate :one
 SELECT *
-FROM tokens
+FROM subscription_tokens
 WHERE token_type = $1
     AND token_hash = $2
     AND created_at > $3;
 
--- name: FindTokenWDateForUpdate :one
+-- name: FindSubscriptionTokenWDateForUpdate :one
 SELECT *
-FROM tokens
+FROM subscription_tokens
 WHERE token_type = $1
     AND token_hash = $2
     AND created_at > $3
 FOR UPDATE;
 
--- name: DeleteTokensBySubscription :exec
-DELETE FROM tokens
+-- name: DeleteSubscriptionTokensBySubID :exec
+DELETE FROM subscription_tokens
 WHERE subscription_id = $1;
 
--- name: DeleteTokensBySubscriptionAndType :exec
-DELETE FROM tokens
+-- name: DeleteSubscriptionTokensBySubIDAndType :exec
+DELETE FROM subscription_tokens
 WHERE subscription_id = $1
     AND token_type = $2;

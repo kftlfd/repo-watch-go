@@ -84,7 +84,7 @@ func (w *inboxWorker) handler(ctx context.Context, msg events.Envelope) (rabbitm
 		if err := qtx.MarkRepositoryRemoved(ctx, ev.RepositoryID); err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("update repo: %w", err)
 		}
-		if err := qtx.DeactivateSubsForRepoAndRemoveTokens(ctx, ev.RepositoryID); err != nil {
+		if err := qtx.DeactivateSubscriptionsForRepoAndRemoveSubscriptionTokens(ctx, ev.RepositoryID); err != nil {
 			return rabbitmq.NackRequeue, fmt.Errorf("deactivate subs: %w", err)
 		}
 		if err := tx.Commit(); err != nil {

@@ -72,7 +72,7 @@ type Subscription struct {
 	UpdatedAt     time.Time
 }
 
-type Token struct {
+type SubscriptionToken struct {
 	ID             int32
 	SubscriptionID int32
 	TokenType      string
