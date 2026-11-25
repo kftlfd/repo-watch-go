@@ -14,15 +14,13 @@ import (
 )
 
 const (
-	defaultBatchSize            = 5
-	defaultMaxAttempts          = 5
-	defaultLeaseDuration        = 5 * time.Second
-	defaultLoopInterval         = 5 * time.Second
-	defaultLoopIterationTimeout = 3 * time.Second
-	defaultRetryBaseBackoff     = 1 * time.Second
-	defaultRetryMaxBackoff      = 60 * time.Second
-
-	storeTimeout = 5 * time.Second
+	defaultBatchSize         = 5
+	defaultMaxAttempts       = 5
+	defaultPollInterval      = 5 * time.Second
+	defaultLeaseDuration     = 10 * time.Second
+	defaultProcessingTimeout = 6 * time.Second
+	defaultRetryBaseBackoff  = 1 * time.Second
+	defaultRetryMaxBackoff   = 60 * time.Second
 )
 
 type Row struct {
@@ -78,13 +76,22 @@ type Store interface {
 }
 
 type DispatcherConfig struct {
-	BatchSize            *int32
-	MaxAttempts          *int32
-	LeaseDuration        *time.Duration
-	LoopInterval         *time.Duration
-	LoopIterationTimeout *time.Duration
-	RetryBaseBackoff     *time.Duration
-	RetryMaxBackoff      *time.Duration
+	BatchSize   *int32
+	MaxAttempts *int32
+	// If no pending rows in store, wait PollInterval before checking again
+	PollInterval *time.Duration
+
+	// Lease that is put on store rows batch for processing
+	LeaseDuration *time.Duration
+	// Timeout for batch processing (includes stats, query, publish/confirm,
+	// mark processed), must be lower than LeaseDuration. Ensures that no writes
+	// to store happen after lease expiration. Due to timeout some events can be
+	// published but not marked as such in the store, causing duplicate event
+	// publication (tune BatchSize and Lease/Timeout to mitigate)
+	ProcessingTimeout *time.Duration
+
+	RetryBaseBackoff *time.Duration
+	RetryMaxBackoff  *time.Duration
 }
 
 type DispatcherDeps struct {
@@ -98,13 +105,13 @@ type DispatcherDeps struct {
 }
 
 type config struct {
-	batchSize            int32
-	maxAttempts          int32
-	leaseDuration        time.Duration
-	loopInterval         time.Duration
-	loopIterationTimeout time.Duration
-	retryBaseBackoff     time.Duration
-	retryMaxBackoff      time.Duration
+	batchSize         int32
+	maxAttempts       int32
+	pollInterval      time.Duration
+	leaseDuration     time.Duration
+	processingTimeout time.Duration
+	retryBaseBackoff  time.Duration
+	retryMaxBackoff   time.Duration
 }
 
 type Dispatcher struct {
@@ -119,13 +126,13 @@ type Dispatcher struct {
 
 func getConfig(conf DispatcherConfig) (config, error) {
 	cfg := config{
-		batchSize:            defaultBatchSize,
-		maxAttempts:          defaultMaxAttempts,
-		leaseDuration:        defaultLeaseDuration,
-		loopInterval:         defaultLoopInterval,
-		loopIterationTimeout: defaultLoopIterationTimeout,
-		retryBaseBackoff:     defaultRetryBaseBackoff,
-		retryMaxBackoff:      defaultRetryMaxBackoff,
+		batchSize:         defaultBatchSize,
+		maxAttempts:       defaultMaxAttempts,
+		leaseDuration:     defaultLeaseDuration,
+		pollInterval:      defaultPollInterval,
+		processingTimeout: defaultProcessingTimeout,
+		retryBaseBackoff:  defaultRetryBaseBackoff,
+		retryMaxBackoff:   defaultRetryMaxBackoff,
 	}
 
 	if conf.BatchSize != nil {
@@ -137,11 +144,11 @@ func getConfig(conf DispatcherConfig) (config, error) {
 	if conf.LeaseDuration != nil {
 		cfg.leaseDuration = *conf.LeaseDuration
 	}
-	if conf.LoopInterval != nil {
-		cfg.loopInterval = *conf.LoopInterval
+	if conf.PollInterval != nil {
+		cfg.pollInterval = *conf.PollInterval
 	}
-	if conf.LoopIterationTimeout != nil {
-		cfg.loopIterationTimeout = *conf.LoopIterationTimeout
+	if conf.ProcessingTimeout != nil {
+		cfg.processingTimeout = *conf.ProcessingTimeout
 	}
 	if conf.RetryBaseBackoff != nil {
 		cfg.retryBaseBackoff = *conf.RetryBaseBackoff
@@ -151,32 +158,32 @@ func getConfig(conf DispatcherConfig) (config, error) {
 	}
 
 	if cfg.batchSize < 1 {
-		return cfg, fmt.Errorf("invalid batch size: %v", cfg.batchSize)
+		return cfg, fmt.Errorf("invalid BatchSize: %v", cfg.batchSize)
 	}
 	if cfg.leaseDuration <= 0 {
-		return cfg, fmt.Errorf("invalid lease duration: %v", cfg.leaseDuration)
+		return cfg, fmt.Errorf("invalid LeaseDuration: %v", cfg.leaseDuration)
 	}
-	if cfg.loopIterationTimeout <= 0 {
-		return cfg, fmt.Errorf("invalid loop iteration timeout: %v", cfg.loopIterationTimeout)
+	if cfg.processingTimeout <= 0 {
+		return cfg, fmt.Errorf("invalid ProcessingTimeout: %v", cfg.processingTimeout)
 	}
-	if cfg.loopIterationTimeout >= cfg.leaseDuration {
+	if cfg.processingTimeout >= cfg.leaseDuration {
 		return cfg, fmt.Errorf(
-			"loop iteration must be less than lease duration, got %v >= %v",
-			cfg.loopIterationTimeout, cfg.leaseDuration)
+			"invalid ProcessingTimeout, must be less than LeaseDuration, got %v >= %v",
+			cfg.processingTimeout, cfg.leaseDuration)
 	}
-	if cfg.loopInterval <= 0 {
-		return cfg, fmt.Errorf("invalid loop interval: %v", cfg.loopInterval)
+	if cfg.pollInterval <= 0 {
+		return cfg, fmt.Errorf("invalid PollInterval: %v", cfg.pollInterval)
 	}
 	if cfg.retryBaseBackoff <= 0 {
-		return cfg, fmt.Errorf("invalid retry backoff: %v", cfg.retryBaseBackoff)
+		return cfg, fmt.Errorf("invalid RetryBaseBackoff: %v", cfg.retryBaseBackoff)
 	}
 	if cfg.retryMaxBackoff < cfg.retryBaseBackoff {
 		return cfg, fmt.Errorf(
-			"retry max backoff must be at least retry backoff, got %v < %v",
+			"invalid RetryMaxBackoff, must be at least RetryBaseBackoff, got %v < %v",
 			cfg.retryMaxBackoff, cfg.retryBaseBackoff)
 	}
 	if cfg.maxAttempts < 1 {
-		return cfg, fmt.Errorf("invalid max attempts: %v", cfg.maxAttempts)
+		return cfg, fmt.Errorf("invalid MaxAttempts: %v", cfg.maxAttempts)
 	}
 
 	return cfg, nil
@@ -245,34 +252,47 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		if n > 0 {
 			continue
 		}
-		if err := d.sleep(ctx, d.cfg.loopInterval); err != nil {
+		if err := d.sleep(ctx, d.cfg.pollInterval); err != nil {
 			return err
 		}
 	}
 }
 
 func (d *Dispatcher) runIteration(ctx context.Context) (processed int, err error) {
-	ctx, cancel := context.WithTimeout(ctx, d.cfg.loopIterationTimeout)
-	defer cancel()
+	now := d.now()
+	leaseDeadline := now.Add(d.cfg.leaseDuration)
+	processDeadline := now.Add(d.cfg.processingTimeout)
 
-	d.recordStats(ctx)
+	// Bounded context for stats and next-batch query
+	queryCtx, cancelQueryCtx := context.WithTimeout(ctx, d.cfg.processingTimeout)
+	defer cancelQueryCtx()
 
-	leaseDeadline := d.now().Add(d.cfg.leaseDuration)
-	batch, err := d.store.GetNextBatch(ctx, d.cfg.batchSize, leaseDeadline)
+	d.recordStats(queryCtx)
+	batch, err := d.store.GetNextBatch(queryCtx, d.cfg.batchSize, leaseDeadline)
 	if err != nil {
 		return 0, fmt.Errorf("get next batch: %w", err)
 	}
-
 	if len(batch) < 1 {
 		return 0, nil
 	}
 
+	// Detach from parent context cancellation, bound by processingTimeout < leaseDuration
+	// to ensure that store operations are not interrupted by shutdown, but no store writes
+	// happen after lease expiration
+	iterCtx, cancelIterCtx := context.WithDeadline(context.WithoutCancel(ctx), processDeadline)
+	defer cancelIterCtx()
+
+	processed = 0
 	publishedIDs := []int32{}
 	errs := []error{}
 
 	for _, row := range batch {
+		if ctx.Err() != nil || iterCtx.Err() != nil {
+			break
+		}
+
 		if row.InvalidReason != "" {
-			failure, failureErr := d.recordFailure(ctx, row, row.InvalidReason, true, time.Time{})
+			failure, failureErr := d.recordFailure(iterCtx, row, row.InvalidReason, true, time.Time{})
 			if failureErr != nil {
 				errs = append(errs, failureErr)
 				break
@@ -283,47 +303,41 @@ func (d *Dispatcher) runIteration(ctx context.Context) (processed int, err error
 			continue
 		}
 
-		published, terminal, publishErr := d.publishRow(ctx, leaseDeadline, row)
+		published, terminal, publishErr := d.publishRow(iterCtx, row)
 		if published {
 			publishedIDs = append(publishedIDs, row.ID)
 			processed++
 			continue
 		}
-		if terminal {
-			processed++
-		}
 		if publishErr != nil {
+			if terminal {
+				processed++
+			}
 			errs = append(errs, publishErr)
 		}
-		// A publish failure is likely to affect the rest of the batch. Leave
-		// the remaining rows leased and try again on a later iteration.
+		// A publish failure (with retry scheduled) is likely to affect the rest of the batch.
+		// Leave the remaining rows leased and try again on a later iteration.
 		break
 	}
 
-	if len(publishedIDs) < 1 {
-		return processed, errors.Join(errs...)
-	}
-
-	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
-	defer cancel()
-
-	if err := d.store.MarkPublished(markCtx, publishedIDs); err != nil {
-		errs = append(errs, fmt.Errorf("mark processed: %w", err))
-	} else {
-		d.metrics.Published(len(publishedIDs))
+	if len(publishedIDs) > 0 {
+		err := d.store.MarkPublished(iterCtx, publishedIDs)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("mark processed: %w", err))
+		} else {
+			d.metrics.Published(len(publishedIDs))
+		}
 	}
 
 	return processed, errors.Join(errs...)
 }
 
 func (d *Dispatcher) recordStats(ctx context.Context) {
-	if ctx.Err() != nil {
-		return
-	}
-
-	pending, err := d.store.PendingStats(ctx)
-	if err != nil {
-		d.logger.Warn("outbox pending stats query failed", "error", err)
+	if pending, err := d.store.PendingStats(ctx); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		d.logger.Warn("get pending stats error", "error", err)
 	} else {
 		d.metrics.SetPending(pending.Count)
 
@@ -334,37 +348,30 @@ func (d *Dispatcher) recordStats(ctx context.Context) {
 		d.metrics.SetOldestAge(pendingAge)
 	}
 
-	failed, err := d.store.FailedStats(ctx)
-	if err != nil {
-		d.logger.Warn("outbox failed stats query failed", "error", err)
-		return
-	}
+	if failed, err := d.store.FailedStats(ctx); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		d.logger.Warn("get failed stats error", "error", err)
+	} else {
+		d.metrics.SetFailed(failed.Count)
 
-	d.metrics.SetFailed(failed.Count)
-
-	var failedAge time.Duration
-	if failed.Count > 0 && !failed.Oldest.IsZero() {
-		failedAge = max(d.now().Sub(failed.Oldest), 0)
+		var failedAge time.Duration
+		if failed.Count > 0 && !failed.Oldest.IsZero() {
+			failedAge = max(d.now().Sub(failed.Oldest), 0)
+		}
+		d.metrics.SetOldestFailedAge(failedAge)
 	}
-	d.metrics.SetOldestFailedAge(failedAge)
 }
 
-func (d *Dispatcher) publishRow(
-	ctx context.Context,
-	leaseDeadline time.Time,
-	row Row,
-) (published bool, terminal bool, err error) {
-	// Detach from shutdown cancellation so an in-flight publisher confirm
-	// can finish; the lease deadline keeps the wait bounded.
-	publishCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), leaseDeadline)
-	err = d.pub.PublishJSON(publishCtx, events.Envelope{
+func (d *Dispatcher) publishRow(ctx context.Context, row Row) (published bool, terminal bool, err error) {
+	err = d.pub.PublishJSON(ctx, events.Envelope{
 		EventID:   row.EventID,
 		EventType: row.EventType,
 		Version:   row.Version,
 		CreatedAt: row.CreatedAt,
 		Payload:   row.Payload,
 	})
-	cancel()
 
 	if err == nil {
 		return true, false, nil
@@ -415,11 +422,8 @@ func (d *Dispatcher) recordFailure(
 	terminal bool,
 	nextAttemptAt time.Time,
 ) (Failure, error) {
-	storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
-	defer cancel()
-
 	failure, err := d.store.RecordFailure(
-		storeCtx,
+		ctx,
 		row.ID,
 		reason,
 		terminal,

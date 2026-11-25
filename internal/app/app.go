@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"syscall"
@@ -31,6 +32,13 @@ func Run(
 	defer signalStop()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(logger, "signal watcher", r)
+				cancel(fmt.Errorf("signal watcher: panic: %v", r))
+			}
+		}()
+
 		select {
 		case <-ctx.Done():
 		case <-signalCtx.Done():
@@ -44,14 +52,21 @@ func Run(
 	var launchErr error
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(logger, "launcher", r)
+				launchErr = fmt.Errorf("launcher: panic: %v", r)
+			}
+			if launchErr != nil {
+				cancel(launchErr)
+			}
+			g.wait()
+			cancel(errGroupFinished)
+			close(done)
+		}()
+
 		logger.Info("starting up")
 		launchErr = launch(g, logger)
-		if launchErr != nil {
-			cancel(launchErr)
-		}
-		g.wait()
-		cancel(errGroupFinished)
-		close(done)
 	}()
 
 	<-ctx.Done()
@@ -99,6 +114,13 @@ func (g *Group) Ctx() context.Context {
 
 func (g *Group) Go(name string, fn func(context.Context) error) {
 	g.wg.Go(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(g.logger, name, r)
+				g.cancel(fmt.Errorf("%s: panic: %v", name, r))
+			}
+		}()
+
 		if err := fn(g.ctx); err != nil && g.ctx.Err() == nil {
 			g.logger.Error("worker failed", "worker", name, "error", err)
 			g.cancel(fmt.Errorf("%s: %w", name, err))
@@ -118,4 +140,12 @@ func (g *Group) wait() {
 	for _, cleanup := range slices.Backward(g.cleanups) {
 		cleanup()
 	}
+}
+
+func logPanic(logger *slog.Logger, name string, recovered any) {
+	logger.Error("worker panicked",
+		"worker", name,
+		"panic", recovered,
+		"stack", string(debug.Stack()),
+	)
 }

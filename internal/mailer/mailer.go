@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 
 	"repo-watch/internal/emails"
@@ -115,9 +116,22 @@ func renderEmail(payload events.EventEmailQueuedPayload, baseURL string) (Email,
 		if err := json.Unmarshal(payload.Data, &data); err != nil {
 			return Email{}, ErrInvalidPayloadData
 		}
+
+		releaseURL := url.URL{
+			Scheme: "https",
+			Host:   "github.com",
+			Path:   "/" + data.Owner + "/" + data.Name + "/releases/tag/" + data.Tag,
+		}
+
 		return Email{
 			subject: fmt.Sprintf("New release for %v: %v", data.RepoID, data.Tag),
-			body:    fmt.Sprintf("Go check on GH, idk.\nUnsubscribe: %v", joinURL(baseURL, "/unsubscribe/"+data.UnsubToken)),
+			body: fmt.Sprintf(
+				"A new release %s is available for %s.\n\nRelease notes: %s\n\nUnsubscribe: %s",
+				data.Tag,
+				data.RepoID,
+				releaseURL.String(),
+				joinURL(baseURL, "/unsubscribe/"+url.PathEscape(data.UnsubToken)),
+			),
 		}, nil
 
 	case emails.EmailUnsubscribed:

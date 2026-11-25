@@ -28,6 +28,7 @@ type fakeStore struct {
 	failedErr   error
 
 	getCalls         int
+	batchesLeased    int
 	markPublishedIDs []int32
 	markPublishedErr error
 
@@ -47,24 +48,37 @@ type failureRecord struct {
 
 func (s *fakeStore) GetNextBatch(ctx context.Context, batchSize int32, leasedUntil time.Time) ([]Row, error) {
 	s.getCalls++
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s.getErr != nil {
 		return nil, s.getErr
 	}
 	rows := s.rows
 	s.rows = nil
+	s.batchesLeased++
 	return rows, nil
 }
 
 func (s *fakeStore) MarkPublished(ctx context.Context, ids []int32) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.markPublishedIDs = append(s.markPublishedIDs, ids...)
 	return s.markPublishedErr
 }
 
-func (s *fakeStore) PendingStats(context.Context) (PendingStats, error) {
+func (s *fakeStore) PendingStats(ctx context.Context) (PendingStats, error) {
+	if err := ctx.Err(); err != nil {
+		return PendingStats{}, err
+	}
 	return s.pendingStats, s.pendingErr
 }
 
-func (s *fakeStore) FailedStats(context.Context) (FailedStats, error) {
+func (s *fakeStore) FailedStats(ctx context.Context) (FailedStats, error) {
+	if err := ctx.Err(); err != nil {
+		return FailedStats{}, err
+	}
 	return s.failedStats, s.failedErr
 }
 
@@ -76,6 +90,9 @@ func (s *fakeStore) RecordFailure(
 	maxAttempts int32,
 	nextAttemptAt time.Time,
 ) (Failure, error) {
+	if err := ctx.Err(); err != nil {
+		return Failure{}, err
+	}
 	if s.attempts == nil {
 		s.attempts = map[int32]int32{}
 	}
@@ -158,13 +175,13 @@ func ptr[T any](v T) *T {
 
 func testConfig() DispatcherConfig {
 	return DispatcherConfig{
-		BatchSize:            ptr(int32(10)),
-		LeaseDuration:        ptr(time.Second),
-		LoopInterval:         ptr(time.Millisecond),
-		LoopIterationTimeout: ptr(500 * time.Millisecond),
-		RetryBaseBackoff:     ptr(time.Millisecond),
-		RetryMaxBackoff:      ptr(10 * time.Millisecond),
-		MaxAttempts:          ptr(int32(3)),
+		BatchSize:         ptr(int32(10)),
+		LeaseDuration:     ptr(time.Second),
+		PollInterval:      ptr(time.Millisecond),
+		ProcessingTimeout: ptr(500 * time.Millisecond),
+		RetryBaseBackoff:  ptr(time.Millisecond),
+		RetryMaxBackoff:   ptr(10 * time.Millisecond),
+		MaxAttempts:       ptr(int32(3)),
 	}
 }
 
@@ -624,4 +641,86 @@ func TestRunLoopRetriesTransientErrorsWithBackoff(t *testing.T) {
 		2 * time.Millisecond,
 		4 * time.Millisecond,
 	}, delays)
+}
+
+func TestRunIterationDoesNotLeaseBatchWhenShutdown(t *testing.T) {
+	store := &fakeStore{rows: []Row{testRow(1)}}
+	pub := &fakePublisher{}
+	d := newTestDispatcher(t, store, pub, testConfig(), &fakeMetrics{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	processed, err := d.runIteration(ctx)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, processed)
+	require.Zero(t, store.batchesLeased, "a shutting down dispatcher must not lease rows")
+	require.Empty(t, pub.calls)
+	require.Empty(t, store.markPublishedIDs)
+}
+
+func TestRunIterationStopsBatchOnShutdown(t *testing.T) {
+	store := &fakeStore{rows: []Row{testRow(1), testRow(2), testRow(3)}}
+	pub := &fakePublisher{}
+	metrics := &fakeMetrics{}
+	d := newTestDispatcher(t, store, pub, testConfig(), metrics)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pub.onPublish = func(context.Context) { cancel() }
+
+	processed, err := d.runIteration(ctx)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	require.Len(t, pub.calls, 1, "rows after shutdown must not be published")
+	require.Equal(t, []int32{1}, store.markPublishedIDs, "confirmed publishes are still marked")
+	require.Empty(t, store.failures)
+	require.Equal(t, 1, metrics.published)
+}
+
+func TestRunLoopDoesNotLeaseAnotherBatchAfterShutdown(t *testing.T) {
+	store := &fakeStore{rows: []Row{testRow(1), testRow(2)}}
+	pub := &fakePublisher{}
+	d := newTestDispatcher(t, store, pub, testConfig(), &fakeMetrics{},
+		withSleep(func(ctx context.Context, _ time.Duration) error { return ctx.Err() }),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pub.onPublish = func(context.Context) { cancel() }
+
+	err := d.Start(ctx)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, store.batchesLeased, "shutdown must not abandon a freshly leased batch")
+	require.Equal(t, []int32{1}, store.markPublishedIDs)
+}
+
+// contextPublisher blocks until its context is done, like a publisher confirm
+// that never arrives.
+type contextPublisher struct{}
+
+func (p *contextPublisher) PublishJSON(ctx context.Context, _ events.Envelope) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestRunIterationPublishTimeoutKeepsRowLeased(t *testing.T) {
+	cfg := testConfig()
+	cfg.LeaseDuration = ptr(time.Second)
+	cfg.ProcessingTimeout = ptr(25 * time.Millisecond)
+
+	store := &fakeStore{rows: []Row{testRow(1), testRow(2)}}
+	d := newTestDispatcher(t, store, &contextPublisher{}, cfg, &fakeMetrics{})
+
+	start := time.Now()
+	processed, err := d.runIteration(context.Background())
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), time.Second, "processing must stop before the lease expires")
+	require.Zero(t, processed)
+	require.Empty(t, store.markPublishedIDs)
+	require.Empty(t, store.failures, "a timed out publish must not consume an attempt")
 }

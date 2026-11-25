@@ -14,6 +14,7 @@ const (
 	defaultReadTimeout       = 15 * time.Second
 	defaultWriteTimeout      = 30 * time.Second
 	defaultIdleTimeout       = 60 * time.Second
+	defaultShutdownTimeout   = 5 * time.Second
 	defaultMaxBodyBytes      = 1 << 20 // 1MB
 )
 
@@ -26,12 +27,14 @@ type ServerDeps struct {
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
+	ShutdownTimeout   time.Duration
 	MaxBodyBytes      int64
 }
 
 type server struct {
-	logger *slog.Logger
-	srv    *http.Server
+	logger          *slog.Logger
+	srv             *http.Server
+	shutdownTimeout time.Duration
 }
 
 func NewServer(d ServerDeps) *server {
@@ -45,8 +48,9 @@ func NewServer(d ServerDeps) *server {
 	}
 
 	return &server{
-		logger: d.Logger,
-		srv:    srv,
+		logger:          d.Logger,
+		srv:             srv,
+		shutdownTimeout: timeoutOr(d.ShutdownTimeout, defaultShutdownTimeout),
 	}
 }
 
@@ -85,13 +89,22 @@ func (s *server) Start(ctx context.Context) error {
 
 	select {
 	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
 		s.logger.Error("unexpected exit", "error", err)
 		return fmt.Errorf("server error: %w", err)
 
 	case <-ctx.Done():
 		s.logger.Info("shutting down")
-		if err := s.srv.Shutdown(context.Background()); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("server shutdown error")
+
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.shutdownTimeout)
+		err := s.srv.Shutdown(shutdownCtx)
+		cancel()
+
+		if err != nil {
+			_ = s.srv.Close()
+			return fmt.Errorf("server shutdown: %w", err)
 		}
 	}
 

@@ -6,6 +6,7 @@ type MetricsRecorder interface {
 	MessageHandled(queue string, ack AckType)
 	HandlerFailed(queue string)
 	HandlerDefectDetected(queue string)
+	HandlerPanicked(queue string)
 	Requeued(queue string)
 	RetryScheduled(queue string, tier string)
 	RetryExhausted(queue string)
@@ -19,6 +20,7 @@ type metrics struct {
 	messages             *prometheus.CounterVec
 	failures             *prometheus.CounterVec
 	defects              *prometheus.CounterVec
+	panics               *prometheus.CounterVec
 	requeues             *prometheus.CounterVec
 	retryScheduled       *prometheus.CounterVec
 	retryExhausted       *prometheus.CounterVec
@@ -48,6 +50,13 @@ func NewMetrics(reg prometheus.Registerer) *metrics {
 			prometheus.CounterOpts{
 				Name: "rabbitmq_consumer_handler_defects_total",
 				Help: "Total consumer handler defects, by queue.",
+			},
+			[]string{"queue"},
+		),
+		panics: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "rabbitmq_consumer_handler_panics_total",
+				Help: "Total consumer handler panics quarantined to the dead-letter queue, by queue.",
 			},
 			[]string{"queue"},
 		),
@@ -101,6 +110,7 @@ func NewMetrics(reg prometheus.Registerer) *metrics {
 		m.failures,
 		m.requeues,
 		m.defects,
+		m.panics,
 		m.retryScheduled,
 		m.retryExhausted,
 		m.retryPublishFailures,
@@ -122,6 +132,10 @@ func (m *metrics) HandlerFailed(queue string) {
 
 func (m *metrics) HandlerDefectDetected(queue string) {
 	m.defects.WithLabelValues(queue).Inc()
+}
+
+func (m *metrics) HandlerPanicked(queue string) {
+	m.panics.WithLabelValues(queue).Inc()
 }
 
 func (m *metrics) Requeued(queue string) {
@@ -162,6 +176,7 @@ type noopMetrics struct{}
 func (noopMetrics) MessageHandled(string, AckType) {}
 func (noopMetrics) HandlerFailed(string)           {}
 func (noopMetrics) HandlerDefectDetected(string)   {}
+func (noopMetrics) HandlerPanicked(string)         {}
 func (noopMetrics) Requeued(string)                {}
 func (noopMetrics) RetryScheduled(string, string)  {}
 func (noopMetrics) RetryExhausted(string)          {}
