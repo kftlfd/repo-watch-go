@@ -32,6 +32,16 @@ type ProcessedEvent struct {
 	ProcessedAt time.Time
 }
 
+type RefreshToken struct {
+	ID        int64
+	SessionID int64
+	TokenHash string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	UsedAt    sql.NullTime
+	RevokedAt sql.NullTime
+}
+
 type Repository struct {
 	ID                       string
 	Owner                    string
@@ -41,6 +51,15 @@ type Repository struct {
 	ActiveVersion            int32
 	CreatedAt                time.Time
 	UpdatedAt                time.Time
+}
+
+type Session struct {
+	ID         int64
+	UserEmail  string
+	CreatedAt  time.Time
+	LastUsedAt time.Time
+	ExpiresAt  time.Time
+	RevokedAt  sql.NullTime
 }
 
 type Subscription struct {
@@ -57,6 +76,22 @@ type Token struct {
 	ID             int32
 	SubscriptionID int32
 	TokenType      string
-	TokenVal       string
+	TokenHash      string
 	CreatedAt      time.Time
+}
+
+type User struct {
+	Email           string
+	PasswordHash    string
+	EmailVerifiedAt sql.NullTime
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type UserToken struct {
+	ID        int64
+	UserEmail string
+	TokenType string
+	TokenHash string
+	CreatedAt time.Time
 }

@@ -126,7 +126,7 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 	_, err = qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
 		SubscriptionID: dbSub.ID,
 		TokenType:      TokenTypeConfirm,
-		TokenVal:       tokenVal,
+		TokenHash:      hashToken(tokenVal),
 	})
 	if err != nil {
 		return err
@@ -167,9 +167,9 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 
 	qtx := s.q.WithTx(tx)
 
-	t, err := qtx.FindTokenWDate(ctx, dbGen.FindTokenWDateParams{
+	t, err := qtx.FindTokenWDateForUpdate(ctx, dbGen.FindTokenWDateForUpdateParams{
 		TokenType: TokenTypeConfirm,
-		TokenVal:  token,
+		TokenHash: hashToken(token),
 		CreatedAt: time.Now().Add(-ConfirmTokenValidity),
 	})
 	if err != nil {
@@ -207,10 +207,10 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	unsubToken, err := qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
+	_, err = qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
 		SubscriptionID: sub.ID,
 		TokenType:      TokenTypeUnsub,
-		TokenVal:       unsubTokenVal,
+		TokenHash:      hashToken(unsubTokenVal),
 	})
 	if err != nil {
 		return err
@@ -229,7 +229,7 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 			Email:          updSub.Email,
 			Active:         updSub.Active,
 			Version:        updSub.ActiveVersion,
-			UnsubToken:     unsubToken.TokenVal,
+			UnsubToken:     unsubTokenVal,
 			UpdatedAt:      updSub.UpdatedAt,
 		},
 	); err != nil {
@@ -287,9 +287,9 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 
 	qtx := s.q.WithTx(tx)
 
-	t, err := qtx.FindToken(ctx, dbGen.FindTokenParams{
+	t, err := qtx.FindTokenForUpdate(ctx, dbGen.FindTokenForUpdateParams{
 		TokenType: TokenTypeUnsub,
-		TokenVal:  token,
+		TokenHash: hashToken(token),
 	})
 	if err != nil {
 		return err

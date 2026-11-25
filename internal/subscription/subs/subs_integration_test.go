@@ -5,6 +5,7 @@ package subs_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -12,9 +13,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"repo-watch/internal/emails"
 	"repo-watch/internal/events"
 	"repo-watch/internal/github"
 	"repo-watch/internal/postgres"
+	"repo-watch/internal/securetoken"
 	"repo-watch/internal/subscription/db/dbGen"
 	"repo-watch/internal/subscription/db/migrations"
 	"repo-watch/internal/subscription/subs"
@@ -107,12 +110,9 @@ func TestEmailIsNormalized(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "alice@example.com", dbSub.Email)
 
-	confirmToken, err := db.Queries.GetToken(ctx, dbGen.GetTokenParams{
-		SubscriptionID: dbSub.ID,
-		TokenType:      subs.TokenTypeConfirm,
-	})
+	confirmToken, err := queuedConfirmToken(t, ctx, db, "alice@example.com")
 	require.NoError(t, err)
-	require.NoError(t, svc.ConfirmSubscription(ctx, confirmToken.TokenVal))
+	require.NoError(t, svc.ConfirmSubscription(ctx, confirmToken))
 
 	repos, err := svc.GetSubscriptionsList(ctx, "ALICE@Example.com")
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func newTestService(db *testDB) testService {
 	})
 }
 
-func createPendingSubscription(t *testing.T, ctx context.Context, db *testDB, svc testService, email, repo string) (dbGen.Subscription, dbGen.Token) {
+func createPendingSubscription(t *testing.T, ctx context.Context, db *testDB, svc testService, email, repo string) (dbGen.Subscription, string) {
 	t.Helper()
 
 	require.NoError(t, svc.CreateSubscription(ctx, email, repo))
@@ -216,27 +216,90 @@ func createPendingSubscription(t *testing.T, ctx context.Context, db *testDB, sv
 	})
 	require.NoError(t, err)
 
-	token, err := db.Queries.GetToken(ctx, dbGen.GetTokenParams{
+	token, err := queuedConfirmToken(t, ctx, db, email)
+	require.NoError(t, err)
+
+	stored, err := db.Queries.GetToken(ctx, dbGen.GetTokenParams{
 		SubscriptionID: dbSub.ID,
 		TokenType:      subs.TokenTypeConfirm,
 	})
 	require.NoError(t, err)
+	require.Equal(t, securetoken.Hash(token), stored.TokenHash)
 
 	return dbSub, token
 }
 
-func confirmSubscription(t *testing.T, ctx context.Context, db *testDB, svc testService, sub dbGen.Subscription, token dbGen.Token) dbGen.Token {
+func confirmSubscription(t *testing.T, ctx context.Context, db *testDB, svc testService, confirmToken string) string {
 	t.Helper()
 
-	require.NoError(t, svc.ConfirmSubscription(ctx, token.TokenVal))
+	require.NoError(t, svc.ConfirmSubscription(ctx, confirmToken))
 
-	unsubToken, err := db.Queries.GetToken(ctx, dbGen.GetTokenParams{
-		SubscriptionID: sub.ID,
-		TokenType:      subs.TokenTypeUnsub,
-	})
+	return queuedUnsubToken(t, ctx, db)
+}
+
+func queuedConfirmToken(t *testing.T, ctx context.Context, db *testDB, email string) (string, error) {
+	t.Helper()
+
+	rows, err := db.DB.QueryContext(ctx, `
+		SELECT payload
+		FROM outbox
+		WHERE event_type = $1
+		ORDER BY id DESC
+		LIMIT 20`,
+		events.EventEmailQueued,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return "", err
+		}
+
+		var queued events.EventEmailQueuedPayload
+		if err := json.Unmarshal(payload, &queued); err != nil {
+			return "", err
+		}
+		if queued.Type != emails.EmailConfirmSubscription || queued.Recipient != email {
+			continue
+		}
+
+		var data emails.EmailConfirmSubscriptionData
+		if err := json.Unmarshal(queued.Data, &data); err != nil {
+			return "", err
+		}
+
+		return data.ConfirmToken, nil
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+
+	return "", sql.ErrNoRows
+}
+
+func queuedUnsubToken(t *testing.T, ctx context.Context, db *testDB) string {
+	t.Helper()
+
+	var payload []byte
+	err := db.DB.QueryRowContext(ctx, `
+		SELECT payload
+		FROM outbox
+		WHERE event_type = $1
+		ORDER BY id DESC
+		LIMIT 1`,
+		events.EventSubscriptionChanged,
+	).Scan(&payload)
 	require.NoError(t, err)
 
-	return unsubToken
+	var changed events.EventSubscriptionChangedPayload
+	require.NoError(t, json.Unmarshal(payload, &changed))
+	require.NotEmpty(t, changed.UnsubToken)
+
+	return changed.UnsubToken
 }
 
 func runConcurrently(fns ...func() error) []error {
@@ -268,15 +331,15 @@ func TestCreateSubscriptionReplacesExistingConfirmToken(t *testing.T) {
 
 	_, secondToken := createPendingSubscription(t, ctx, db, svc, "alice@example.com", "owner/repository")
 
-	require.NotEqual(t, firstToken.TokenVal, secondToken.TokenVal)
+	require.NotEqual(t, firstToken, secondToken)
 
 	_, err := db.Queries.FindToken(ctx, dbGen.FindTokenParams{
 		TokenType: subs.TokenTypeConfirm,
-		TokenVal:  firstToken.TokenVal,
+		TokenHash: securetoken.Hash(firstToken),
 	})
 	require.ErrorIs(t, err, sql.ErrNoRows)
 
-	require.NoError(t, svc.ConfirmSubscription(ctx, secondToken.TokenVal))
+	require.NoError(t, svc.ConfirmSubscription(ctx, secondToken))
 }
 
 func TestConfirmSubscriptionRejectsAlreadyActive(t *testing.T) {
@@ -285,13 +348,13 @@ func TestConfirmSubscriptionRejectsAlreadyActive(t *testing.T) {
 	svc := newTestService(db)
 
 	sub, confirmToken := createPendingSubscription(t, ctx, db, svc, "alice@example.com", "owner/repository")
-	unsubToken := confirmSubscription(t, ctx, db, svc, sub, confirmToken)
+	unsubToken := confirmSubscription(t, ctx, db, svc, confirmToken)
 
 	newToken := "new-confirm-token"
 	_, err := db.Queries.UpsertToken(ctx, dbGen.UpsertTokenParams{
 		SubscriptionID: sub.ID,
 		TokenType:      subs.TokenTypeConfirm,
-		TokenVal:       newToken,
+		TokenHash:      securetoken.Hash(newToken),
 	})
 	require.NoError(t, err)
 
@@ -323,7 +386,7 @@ func TestConfirmSubscriptionRejectsAlreadyActive(t *testing.T) {
 		TokenType:      subs.TokenTypeUnsub,
 	})
 	require.NoError(t, err)
-	require.Equal(t, unsubToken.TokenVal, storedUnsub.TokenVal)
+	require.Equal(t, securetoken.Hash(unsubToken), storedUnsub.TokenHash)
 }
 
 func TestConcurrentConfirmationIncrementsRepositoryOnce(t *testing.T) {
@@ -334,8 +397,8 @@ func TestConcurrentConfirmationIncrementsRepositoryOnce(t *testing.T) {
 	_, confirmToken := createPendingSubscription(t, ctx, db, svc, "alice@example.com", "owner/repository")
 
 	errs := runConcurrently(
-		func() error { return svc.ConfirmSubscription(ctx, confirmToken.TokenVal) },
-		func() error { return svc.ConfirmSubscription(ctx, confirmToken.TokenVal) },
+		func() error { return svc.ConfirmSubscription(ctx, confirmToken) },
+		func() error { return svc.ConfirmSubscription(ctx, confirmToken) },
 	)
 
 	var succeeded int
@@ -382,12 +445,12 @@ func TestConcurrentUnsubscribeDecrementsRepositoryOnce(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(db)
 
-	sub, confirmToken := createPendingSubscription(t, ctx, db, svc, "alice@example.com", "owner/repository")
-	unsubToken := confirmSubscription(t, ctx, db, svc, sub, confirmToken)
+	_, confirmToken := createPendingSubscription(t, ctx, db, svc, "alice@example.com", "owner/repository")
+	unsubToken := confirmSubscription(t, ctx, db, svc, confirmToken)
 
 	errs := runConcurrently(
-		func() error { return svc.DeactivateSubscription(ctx, unsubToken.TokenVal) },
-		func() error { return svc.DeactivateSubscription(ctx, unsubToken.TokenVal) },
+		func() error { return svc.DeactivateSubscription(ctx, unsubToken) },
+		func() error { return svc.DeactivateSubscription(ctx, unsubToken) },
 	)
 
 	var succeeded int
@@ -408,7 +471,7 @@ func TestConcurrentUnsubscribeDecrementsRepositoryOnce(t *testing.T) {
 	require.Equal(t, int32(0), repo.ActiveSubscriptionsCount)
 	require.Equal(t, int32(2), repo.ActiveVersion)
 
-	sub, err = db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+	sub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
 		Email:        "alice@example.com",
 		RepositoryID: "owner/repository",
 	})
