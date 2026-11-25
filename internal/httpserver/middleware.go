@@ -2,12 +2,11 @@ package httpserver
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
@@ -39,13 +38,23 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics, allowTraceparent bo
 			)
 		}
 
-		ctx, span := observability.Tracer().Start(ctx, strings.TrimSpace(fmt.Sprintf("HTTP %v %v", c.Request.Method, path)),
+		spanName := "HTTP " + c.Request.Method
+		if path != "" {
+			spanName += " " + path
+		} else {
+			spanName += " unmatched"
+		}
+		spanAttrs := []attribute.KeyValue{
+			observability.Attr.HTTPRequestMethod(c.Request.Method),
+			observability.Attr.URLPath(c.Request.URL.Path),
+			observability.Attr.CorrelationID(requestID),
+		}
+		if path != "" {
+			spanAttrs = append(spanAttrs, observability.Attr.HTTPRoute(path))
+		}
+		ctx, span := observability.Tracer().Start(ctx, spanName,
 			trace.WithSpanKind(trace.SpanKindServer),
-			trace.WithAttributes(
-				observability.Attr.HTTPRequestMethod(c.Request.Method),
-				observability.Attr.HTTPRoute(path),
-				observability.Attr.CorrelationID(requestID),
-			),
+			trace.WithAttributes(spanAttrs...),
 		)
 		defer span.End()
 

@@ -381,6 +381,7 @@ func (d *Dispatcher) publishRow(ctx context.Context, row Row) (published bool, t
 		trace.WithSpanKind(trace.SpanKindProducer),
 		observability.WithTraceLink(row.TraceParent),
 		trace.WithAttributes(
+			observability.Attr.MessagingSystem("rabbitmq"),
 			observability.Attr.MessagingOpSend(),
 			observability.Attr.MessagingEventType(row.EventType),
 			observability.Attr.MessagingEventID(row.EventID),
@@ -472,15 +473,16 @@ func (d *Dispatcher) recordFailure(
 	}
 
 	if failure.Terminal {
-		d.logger.Error(
-			"outbox event dead-lettered",
+		logArgs := []any{
 			"outbox_id", row.ID,
 			"event_type", row.EventType,
 			"event_id", row.EventID,
 			"correlation_id", row.CorrelationID,
 			"attempts", failure.Attempts,
 			"error", reason,
-		)
+		}
+		logArgs = append(logArgs, observability.TraceLogAttrs(ctx)...)
+		d.logger.Error("outbox event dead-lettered", logArgs...)
 		d.metrics.DeadLettered()
 	}
 

@@ -336,6 +336,7 @@ func (s *consumerSession) handleDelivery(delivery *amqp091.Delivery) error {
 		handlerCtx, span := observability.Tracer().Start(handlerCtx, "process "+msg.EventType,
 			trace.WithSpanKind(trace.SpanKindConsumer),
 			trace.WithAttributes(
+				observability.Attr.MessagingSystem("rabbitmq"),
 				observability.Attr.MessagingOpProcess(),
 				observability.Attr.MessagingDestination(s.queueName),
 				observability.Attr.MessagingEventType(msg.EventType),

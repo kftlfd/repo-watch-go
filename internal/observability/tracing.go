@@ -178,12 +178,33 @@ type attr struct{}
 var Attr attr
 
 func (attr) schemaURL() string { return semconv.SchemaURL }
+func (attr) ServiceName(name string) attribute.KeyValue {
+	return semconv.ServiceName(name)
+}
 
 func (attr) CorrelationID(id string) attribute.KeyValue {
 	return attribute.String("app.correlation_id", id)
 }
-func (attr) ServiceName(name string) attribute.KeyValue {
-	return semconv.ServiceName(name)
+func (attr) NotificationType(name string) attribute.KeyValue {
+	return attribute.String("app.notification.type", name)
+}
+func (attr) RepositoryID(id string) attribute.KeyValue {
+	return attribute.String("app.repository.id", id)
+}
+func (attr) RepositoryOwner(owner string) attribute.KeyValue {
+	return attribute.String("app.repository.owner", owner)
+}
+func (attr) RepositoryName(name string) attribute.KeyValue {
+	return attribute.String("app.repository.name", name)
+}
+func (attr) ReleaseTag(tag string) attribute.KeyValue {
+	return attribute.String("app.release.tag", tag)
+}
+func (attr) GithubAttempt(attempt int) attribute.KeyValue {
+	return attribute.Int("app.github.attempt", attempt)
+}
+func (attr) ScannerBatchSize(size int) attribute.KeyValue {
+	return attribute.Int("app.scanner.batch_size", size)
 }
 
 func (attr) HTTPRequestMethod(method string) attribute.KeyValue {
@@ -195,12 +216,18 @@ func (attr) HTTPRoute(path string) attribute.KeyValue {
 func (attr) HTTPResponseStatus(status int) attribute.KeyValue {
 	return semconv.HTTPResponseStatusCode(status)
 }
+func (attr) URLPath(path string) attribute.KeyValue {
+	return semconv.URLPath(path)
+}
 
+func (attr) MessagingSystem(system string) attribute.KeyValue {
+	return semconv.MessagingSystemKey.String(system)
+}
 func (attr) MessagingOpSend() attribute.KeyValue {
-	return semconv.MessagingOperationTypeKey.String("send")
+	return semconv.MessagingOperationTypeSend
 }
 func (attr) MessagingOpProcess() attribute.KeyValue {
-	return semconv.MessagingOperationTypeKey.String("process")
+	return semconv.MessagingOperationTypeProcess
 }
 func (attr) MessagingDestination(queueName string) attribute.KeyValue {
 	return semconv.MessagingDestinationNameKey.String(queueName)
