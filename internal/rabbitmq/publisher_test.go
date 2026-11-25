@@ -6,10 +6,10 @@ import (
 	"errors"
 	"testing"
 
-	"repo-watch/internal/events"
-
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/require"
+
+	"repo-watch/internal/events"
 )
 
 func TestPublisherRejectsInvalidMessages(t *testing.T) {

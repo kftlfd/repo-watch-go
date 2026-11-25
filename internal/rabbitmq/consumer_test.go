@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"repo-watch/internal/events"
-	"repo-watch/internal/observability"
-
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/require"
+
+	"repo-watch/internal/events"
+	"repo-watch/internal/observability"
 )
 
 type fakeAcknowledger struct {
