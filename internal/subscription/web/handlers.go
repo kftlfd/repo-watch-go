@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"repo-watch/internal/httpserver"
+	"repo-watch/internal/subscription/identity"
 	"repo-watch/internal/subscription/subs"
 )
 
@@ -48,7 +49,13 @@ func (h *webHandler) handleCreateSubscription(c *gin.Context) {
 		return
 	}
 
-	if err := h.subsService.CreateSubscription(c.Request.Context(), form.Email, form.Repo); err != nil {
+	email, err := identity.ParseEmail(form.Email)
+	if err != nil {
+		h.renderSubscribeError(c, http.StatusBadRequest, form, msgInvalidInput)
+		return
+	}
+
+	if err := h.subsService.CreateSubscription(c.Request.Context(), email, form.Repo); err != nil {
 		status, message := subscribeErrorMessage(err)
 		if status == http.StatusInternalServerError {
 			httpserver.RecordError(c, "create subscription", err)

@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"repo-watch/internal/httpserver"
+	"repo-watch/internal/subscription/identity"
 	"repo-watch/internal/subscription/subs"
 )
 
@@ -63,7 +64,13 @@ func (h *apiHandler) handleCreateSubscription(c *gin.Context) {
 		return
 	}
 
-	if err := h.subsService.CreateSubscription(c.Request.Context(), req.Email, req.Repo); err != nil {
+	email, err := identity.ParseEmail(req.Email)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidInput})
+		return
+	}
+
+	if err := h.subsService.CreateSubscription(c.Request.Context(), email, req.Repo); err != nil {
 		h.respondServiceError(c, "create subscription", err)
 		return
 	}
@@ -141,7 +148,7 @@ func (h *apiHandler) handleDeactivateSubscription(c *gin.Context) {
 // @Failure      500  {object}  errorResponse          "Internal server error"
 // @Router       /subscriptions [get]
 func (h *apiHandler) handleListSubscriptions(c *gin.Context) {
-	email, err := subs.NormalizeEmail(c.Query("email"))
+	email, err := identity.ParseEmail(c.Query("email"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidEmail})
 		return
@@ -156,7 +163,7 @@ func (h *apiHandler) handleListSubscriptions(c *gin.Context) {
 	resp := make([]subscriptionResponse, len(repos))
 	for i, repo := range repos {
 		resp[i] = subscriptionResponse{
-			Email:     email,
+			Email:     email.String(),
 			Repo:      repo,
 			Confirmed: true,
 		}

@@ -20,6 +20,7 @@ import (
 	"repo-watch/internal/securetoken"
 	"repo-watch/internal/subscription/db/dbGen"
 	"repo-watch/internal/subscription/db/migrations"
+	"repo-watch/internal/subscription/identity"
 	"repo-watch/internal/subscription/subs"
 	"repo-watch/tests/containers"
 )
@@ -40,6 +41,14 @@ func newTestDB(t *testing.T) *testDB {
 		Queries: dbGen.New(db),
 	}
 
+}
+
+func mustEmail(t *testing.T, raw string) identity.Email {
+	t.Helper()
+
+	email, err := identity.ParseEmail(raw)
+	require.NoError(t, err)
+	return email
 }
 
 type fakeGitHub struct {
@@ -69,7 +78,7 @@ func TestCreateSubscription(t *testing.T) {
 
 	ctx := context.Background()
 
-	email := "alice@example.com"
+	email := mustEmail(t, "alice@example.com")
 	repo := "owner/repository"
 
 	err := svc.CreateSubscription(ctx, email, repo)
@@ -79,7 +88,7 @@ func TestCreateSubscription(t *testing.T) {
 	require.NoError(t, err)
 
 	dbSub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
-		Email:        email,
+		Email:        email.String(),
 		RepositoryID: dbRepo.ID,
 	})
 	require.NoError(t, err)
@@ -101,10 +110,12 @@ func TestEmailIsNormalized(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(db)
 
-	require.NoError(t, svc.CreateSubscription(ctx, "ALICE@Example.COM", "owner/repository"))
+	email := mustEmail(t, "ALICE@Example.COM")
+	require.Equal(t, "alice@example.com", email.String())
+	require.NoError(t, svc.CreateSubscription(ctx, email, "owner/repository"))
 
 	dbSub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
-		Email:        "alice@example.com",
+		Email:        email.String(),
 		RepositoryID: "owner/repository",
 	})
 	require.NoError(t, err)
@@ -114,12 +125,12 @@ func TestEmailIsNormalized(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.ConfirmSubscription(ctx, confirmToken))
 
-	repos, err := svc.GetSubscriptionsList(ctx, "ALICE@Example.com")
+	repos, err := svc.GetSubscriptionsList(ctx, email)
 	require.NoError(t, err)
 	require.Equal(t, []string{"owner/repository"}, repos)
 
-	_, err = svc.GetSubscriptionsList(ctx, "not-an-email")
-	require.ErrorIs(t, err, subs.ErrInvalidInput)
+	_, err = identity.ParseEmail("not-an-email")
+	require.ErrorIs(t, err, identity.ErrInvalidEmail)
 }
 
 func TestCreateSubscriptionSkipsGithubForKnownRepository(t *testing.T) {
@@ -134,10 +145,10 @@ func TestCreateSubscriptionSkipsGithubForKnownRepository(t *testing.T) {
 		Queries:      db.Queries,
 	})
 
-	require.NoError(t, svc.CreateSubscription(ctx, "alice@example.com", "owner/repository"))
+	require.NoError(t, svc.CreateSubscription(ctx, mustEmail(t, "alice@example.com"), "owner/repository"))
 
 	gh.err = errors.New("github must not be called for a known repository")
-	require.NoError(t, svc.CreateSubscription(ctx, "bob@example.com", "owner/repository"))
+	require.NoError(t, svc.CreateSubscription(ctx, mustEmail(t, "bob@example.com"), "owner/repository"))
 
 	dbRepo, err := db.Queries.GetRepositoryByID(ctx, "owner/repository")
 	require.NoError(t, err)
@@ -184,17 +195,17 @@ func TestCreateSubscriptionMapsGithubErrors(t *testing.T) {
 				Queries:      db.Queries,
 			})
 
-			err := svc.CreateSubscription(ctx, "alice@example.com", "owner/repository")
+			err := svc.CreateSubscription(ctx, mustEmail(t, "alice@example.com"), "owner/repository")
 			require.ErrorIs(t, err, tt.want)
 		})
 	}
 }
 
 type testService interface {
-	CreateSubscription(ctx context.Context, email, repo string) error
+	CreateSubscription(ctx context.Context, email identity.Email, repo string) error
 	ConfirmSubscription(ctx context.Context, token string) error
 	DeactivateSubscription(ctx context.Context, token string) error
-	GetSubscriptionsList(ctx context.Context, email string) ([]string, error)
+	GetSubscriptionsList(ctx context.Context, email identity.Email) ([]string, error)
 }
 
 func newTestService(db *testDB) testService {
@@ -205,18 +216,18 @@ func newTestService(db *testDB) testService {
 	})
 }
 
-func createPendingSubscription(t *testing.T, ctx context.Context, db *testDB, svc testService, email, repo string) (dbGen.Subscription, string) {
+func createPendingSubscription(t *testing.T, ctx context.Context, db *testDB, svc testService, email identity.Email, repo string) (dbGen.Subscription, string) {
 	t.Helper()
 
 	require.NoError(t, svc.CreateSubscription(ctx, email, repo))
 
 	dbSub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
-		Email:        email,
+		Email:        email.String(),
 		RepositoryID: repo,
 	})
 	require.NoError(t, err)
 
-	token, err := queuedConfirmToken(t, ctx, db, email)
+	token, err := queuedConfirmToken(t, ctx, db, email.String())
 	require.NoError(t, err)
 
 	stored, err := db.Queries.GetSubscriptionToken(ctx, dbGen.GetSubscriptionTokenParams{
@@ -327,9 +338,9 @@ func TestCreateSubscriptionReplacesExistingConfirmToken(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(db)
 
-	_, firstToken := createPendingSubscription(t, ctx, db, svc, "alice@example.com", "owner/repository")
+	_, firstToken := createPendingSubscription(t, ctx, db, svc, mustEmail(t, "alice@example.com"), "owner/repository")
 
-	_, secondToken := createPendingSubscription(t, ctx, db, svc, "alice@example.com", "owner/repository")
+	_, secondToken := createPendingSubscription(t, ctx, db, svc, mustEmail(t, "alice@example.com"), "owner/repository")
 
 	require.NotEqual(t, firstToken, secondToken)
 
@@ -347,7 +358,7 @@ func TestConfirmSubscriptionRejectsAlreadyActive(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(db)
 
-	sub, confirmToken := createPendingSubscription(t, ctx, db, svc, "alice@example.com", "owner/repository")
+	sub, confirmToken := createPendingSubscription(t, ctx, db, svc, mustEmail(t, "alice@example.com"), "owner/repository")
 	unsubToken := confirmSubscription(t, ctx, db, svc, confirmToken)
 
 	newToken := "new-confirm-token"
@@ -394,7 +405,7 @@ func TestConcurrentConfirmationIncrementsRepositoryOnce(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(db)
 
-	_, confirmToken := createPendingSubscription(t, ctx, db, svc, "alice@example.com", "owner/repository")
+	_, confirmToken := createPendingSubscription(t, ctx, db, svc, mustEmail(t, "alice@example.com"), "owner/repository")
 
 	errs := runConcurrently(
 		func() error { return svc.ConfirmSubscription(ctx, confirmToken) },
@@ -445,7 +456,7 @@ func TestConcurrentUnsubscribeDecrementsRepositoryOnce(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(db)
 
-	_, confirmToken := createPendingSubscription(t, ctx, db, svc, "alice@example.com", "owner/repository")
+	_, confirmToken := createPendingSubscription(t, ctx, db, svc, mustEmail(t, "alice@example.com"), "owner/repository")
 	unsubToken := confirmSubscription(t, ctx, db, svc, confirmToken)
 
 	errs := runConcurrently(

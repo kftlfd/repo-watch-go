@@ -12,6 +12,7 @@ import (
 	"repo-watch/internal/events"
 	"repo-watch/internal/github"
 	"repo-watch/internal/subscription/db/dbGen"
+	"repo-watch/internal/subscription/identity"
 	"repo-watch/internal/subscription/outbox"
 )
 
@@ -49,12 +50,7 @@ func NewService(d Deps) *service {
 	}
 }
 
-func (s *service) CreateSubscription(ctx context.Context, email, repo string) error {
-	emailInfo, err := verifyEmailInfo(email)
-	if err != nil {
-		return ErrInvalidInput
-	}
-
+func (s *service) CreateSubscription(ctx context.Context, email identity.Email, repo string) error {
 	repoInfo, err := verifyRepoInfo(repo)
 	if err != nil {
 		return ErrInvalidInput
@@ -102,12 +98,12 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 	}
 
 	dbSub, err := qtx.CreateSubscription(ctx, dbGen.CreateSubscriptionParams{
-		Email:        emailInfo.email,
+		Email:        email.String(),
 		RepositoryID: repoInfo.repoId,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		dbSub, err = qtx.GetSubscription(ctx, dbGen.GetSubscriptionParams{
-			Email:        emailInfo.email,
+			Email:        email.String(),
 			RepositoryID: repoInfo.repoId,
 		})
 	}
@@ -141,7 +137,7 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 	}
 
 	if err = outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
-		Recipient: emailInfo.email,
+		Recipient: email.String(),
 		Type:      emails.EmailConfirmSubscription,
 		Data:      emailData,
 	}); err != nil {
@@ -361,13 +357,8 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 	return nil
 }
 
-func (s *service) GetSubscriptionsList(ctx context.Context, email string) ([]string, error) {
-	email, err := NormalizeEmail(email)
-	if err != nil {
-		return nil, ErrInvalidInput
-	}
-
-	subs, err := s.q.ListSubscriptionsByEmail(ctx, email)
+func (s *service) GetSubscriptionsList(ctx context.Context, email identity.Email) ([]string, error) {
+	subs, err := s.q.ListSubscriptionsByEmail(ctx, email.String())
 	if err != nil {
 		return nil, err
 	}

@@ -2,7 +2,6 @@ package subs
 
 import (
 	"fmt"
-	"net/mail"
 	"strings"
 	"unicode"
 )
@@ -46,42 +45,4 @@ func verifyRepoInfo(inpStr string) (repoInfo, error) {
 	rid.owner = owner
 	rid.name = repo
 	return rid, nil
-}
-
-type emailInfo struct {
-	email string
-}
-
-// NormalizeEmail returns the canonical form used for storing and looking up
-// subscriptions: the bare address, lowercased. Display-name forms are rejected.
-func NormalizeEmail(emailStr string) (string, error) {
-	emailStr = strings.TrimSpace(emailStr)
-	if emailStr == "" {
-		return "", fmt.Errorf("empty email")
-	}
-
-	addr, err := mail.ParseAddress(emailStr)
-	if err != nil {
-		return "", fmt.Errorf("invalid email: %w", err)
-	}
-
-	if addr.Address != emailStr {
-		return "", fmt.Errorf("email must be a bare address")
-	}
-
-	email := strings.ToLower(addr.Address)
-	if email == "" {
-		return "", fmt.Errorf("empty email")
-	}
-
-	return email, nil
-}
-
-func verifyEmailInfo(emailStr string) (emailInfo, error) {
-	email, err := NormalizeEmail(emailStr)
-	if err != nil {
-		return emailInfo{}, err
-	}
-
-	return emailInfo{email: email}, nil
 }

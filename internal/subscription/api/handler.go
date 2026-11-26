@@ -6,13 +6,14 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"repo-watch/internal/subscription/api/docs"
+	"repo-watch/internal/subscription/identity"
 )
 
 type subsService interface {
 	ConfirmSubscription(ctx context.Context, token string) error
-	CreateSubscription(ctx context.Context, email, repo string) error
+	CreateSubscription(ctx context.Context, email identity.Email, repo string) error
 	DeactivateSubscription(ctx context.Context, token string) error
-	GetSubscriptionsList(ctx context.Context, email string) ([]string, error)
+	GetSubscriptionsList(ctx context.Context, email identity.Email) ([]string, error)
 }
 
 type Deps struct {

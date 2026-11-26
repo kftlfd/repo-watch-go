@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"repo-watch/internal/httpserver"
+	"repo-watch/internal/subscription/identity"
 	"repo-watch/internal/subscription/subs"
 )
 
@@ -35,8 +36,8 @@ type fakeSubsService struct {
 	listErr         error
 }
 
-func (f *fakeSubsService) CreateSubscription(_ context.Context, email, repo string) error {
-	f.createEmail = email
+func (f *fakeSubsService) CreateSubscription(_ context.Context, email identity.Email, repo string) error {
+	f.createEmail = email.String()
 	f.createRepo = repo
 	return f.createErr
 }
@@ -51,8 +52,8 @@ func (f *fakeSubsService) DeactivateSubscription(_ context.Context, token string
 	return f.deactivateErr
 }
 
-func (f *fakeSubsService) GetSubscriptionsList(_ context.Context, email string) ([]string, error) {
-	f.listEmail = email
+func (f *fakeSubsService) GetSubscriptionsList(_ context.Context, email identity.Email) ([]string, error) {
+	f.listEmail = email.String()
 	return f.listRepos, f.listErr
 }
 
