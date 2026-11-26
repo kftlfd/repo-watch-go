@@ -15,12 +15,17 @@ const (
 
 	userTokenVerifyBytes = 32
 	refreshTokenBytes    = 32
-	jwtIDBytes           = 16
 )
 
-// NewVerificationToken returns a new 32-byte email-verification token and the
+// ValidUserVerifyToken reports whether token has the shape of an
+// email-verification token.
+func ValidUserVerifyToken(token string) bool {
+	return securetoken.Validate(token, userTokenVerifyBytes)
+}
+
+// NewUserVerifyToken returns a new 32-byte email-verification token and the
 // SHA-256 hash that must be persisted. The raw value is only sent to the user.
-func NewVerificationToken() (raw, hash string, err error) {
+func NewUserVerifyToken() (raw, hash string, err error) {
 	raw, err = securetoken.Generate(userTokenVerifyBytes)
 	if err != nil {
 		return "", "", err

@@ -4,10 +4,14 @@
       {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
       <form method="post" action="/subscribe">
         <input type="hidden" name="csrf_token" value="{{.CSRFToken}}" />
-        <label>
-          Email
-          <input type="email" name="email" value="{{.Email}}" autocomplete="email" required />
-        </label>
+        {{if .SessionEmail}}
+          <p>Subscribing as <strong>{{.SessionEmail}}</strong>.</p>
+        {{else}}
+          <label>
+            Email
+            <input type="email" name="email" value="{{.Email}}" autocomplete="email" required />
+          </label>
+        {{end}}
         <label>
           Repository
           <input type="text" name="repo" value="{{.Repo}}" placeholder="owner/name" required />

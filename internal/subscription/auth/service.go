@@ -400,7 +400,7 @@ func (s *Service) RevokeSessionByRefreshToken(ctx context.Context, rawRefreshTok
 }
 
 func (s *Service) queueVerificationEmail(ctx context.Context, qtx *dbGen.Queries, email identity.Email) error {
-	rawToken, tokenHash, err := NewVerificationToken()
+	rawToken, tokenHash, err := NewUserVerifyToken()
 	if err != nil {
 		return fmt.Errorf("generate verification token: %w", err)
 	}

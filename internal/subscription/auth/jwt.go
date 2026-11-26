@@ -15,6 +15,7 @@ const (
 	MinJWTSecretLength = 32
 
 	jwtAlgorithm = "HS256"
+	jwtIDBytes   = 16
 )
 
 var (

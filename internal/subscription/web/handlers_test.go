@@ -30,15 +30,25 @@ type fakeSubsService struct {
 	createErr       error
 	createEmail     string
 	createRepo      string
+	createVerified  bool
 	confirmErr      error
 	confirmToken    string
 	deactivateErr   error
 	deactivateToken string
+
+	byRepoEmail string
+	byRepoRepo  string
+	byRepoErr   error
+
+	listEmail string
+	listRepos []string
+	listErr   error
 }
 
-func (f *fakeSubsService) CreateSubscription(_ context.Context, email identity.Email, repo string, _ bool) error {
+func (f *fakeSubsService) CreateSubscription(_ context.Context, email identity.Email, repo string, verified bool) error {
 	f.createEmail = email.String()
 	f.createRepo = repo
+	f.createVerified = verified
 	return f.createErr
 }
 
@@ -52,11 +62,33 @@ func (f *fakeSubsService) DeactivateSubscription(_ context.Context, token string
 	return f.deactivateErr
 }
 
+func (f *fakeSubsService) DeactivateSubscriptionByRepo(
+	_ context.Context,
+	email identity.Email,
+	repo string,
+) error {
+	f.byRepoEmail = email.String()
+	f.byRepoRepo = repo
+	return f.byRepoErr
+}
+
+func (f *fakeSubsService) GetSubscriptionsList(_ context.Context, email identity.Email) ([]string, error) {
+	f.listEmail = email.String()
+	return f.listRepos, f.listErr
+}
+
 type fakeMetrics struct{}
 
 func (fakeMetrics) HTTPRequest(string, string, int, time.Duration) {}
 
 type fakeAuthService struct {
+	signupEmail    string
+	signupPassword string
+	signupErr      error
+
+	verifyToken string
+	verifyErr   error
+
 	loginEmail    string
 	loginPassword string
 	loginPair     auth.TokenPair
@@ -73,6 +105,17 @@ type fakeAuthService struct {
 
 	revokeSessionID int64
 	revokeErr       error
+}
+
+func (f *fakeAuthService) Signup(_ context.Context, email identity.Email, password string) error {
+	f.signupEmail = email.String()
+	f.signupPassword = password
+	return f.signupErr
+}
+
+func (f *fakeAuthService) VerifyEmail(_ context.Context, token string) error {
+	f.verifyToken = token
+	return f.verifyErr
 }
 
 func (f *fakeAuthService) Login(_ context.Context, email identity.Email, password string) (auth.TokenPair, error) {
@@ -681,4 +724,429 @@ func responseCookie(t *testing.T, w *httptest.ResponseRecorder, name string) *ht
 	}
 
 	return found
+}
+
+func verificationToken(t *testing.T) string {
+	t.Helper()
+
+	token, _, err := auth.NewUserVerifyToken()
+	require.NoError(t, err)
+	return token
+}
+
+func addAccessCookie(req *http.Request, cookies *auth.CookieManager) {
+	req.AddCookie(&http.Cookie{Name: cookies.AccessName(), Value: "access-token"})
+}
+
+func doAuthenticatedRequest(
+	t *testing.T,
+	h http.Handler,
+	cookies *auth.CookieManager,
+	method, target, contentType, body string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req := httptest.NewRequest(method, target, reader)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	addAccessCookie(req, cookies)
+	if !isSafeMethod(method) {
+		csrfCookie, token := csrfToken(t, h)
+		req.AddCookie(csrfCookie)
+		req.Header.Set(httpserver.CSRFHeader, token)
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	return w
+}
+
+func TestSignupPage(t *testing.T) {
+	h, _ := newTestRouter(t, &fakeSubsService{})
+
+	w := doRequest(t, h, http.MethodGet, "/signup", "", "")
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `action="/signup"`)
+	require.Contains(t, w.Body.String(), `name="email"`)
+	require.Contains(t, w.Body.String(), `name="password"`)
+	require.Contains(t, w.Body.String(), `name="csrf_token"`)
+	require.Contains(t, w.Body.String(), `href="/login"`)
+}
+
+func TestSignupSuccess(t *testing.T) {
+	authSvc := &fakeAuthService{}
+	h, _, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+	form := url.Values{
+		"email":    {"alice@example.com"},
+		"password": {"correct horse battery staple"},
+	}.Encode()
+
+	w := doRequest(t, h, http.MethodPost, "/signup", "application/x-www-form-urlencoded", form)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), msgSignupCheckEmail)
+	require.Equal(t, "alice@example.com", authSvc.signupEmail)
+	require.Equal(t, "correct horse battery staple", authSvc.signupPassword)
+}
+
+func TestSignupValidationPreservesEmail(t *testing.T) {
+	authSvc := &fakeAuthService{}
+	h, _, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+	form := url.Values{
+		"email":    {"not-an-email"},
+		"password": {"secret"},
+	}.Encode()
+
+	w := doRequest(t, h, http.MethodPost, "/signup", "application/x-www-form-urlencoded", form)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Contains(t, w.Body.String(), msgSignupInvalid)
+	require.Contains(t, w.Body.String(), `value="not-an-email"`)
+	require.NotContains(t, w.Body.String(), `value="secret"`)
+	require.Empty(t, authSvc.signupEmail)
+}
+
+func TestSignupMapsErrors(t *testing.T) {
+	t.Run("invalid password length", func(t *testing.T) {
+		authSvc := &fakeAuthService{signupErr: auth.ErrInvalidPasswordLength}
+		h, _, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+		form := url.Values{
+			"email":    {"alice@example.com"},
+			"password": {"secret"},
+		}.Encode()
+
+		w := doRequest(t, h, http.MethodPost, "/signup", "application/x-www-form-urlencoded", form)
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		require.Contains(t, w.Body.String(), msgSignupInvalid)
+	})
+
+	t.Run("internal error", func(t *testing.T) {
+		authSvc := &fakeAuthService{signupErr: errors.New("secret signup failure")}
+		h, logs, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+		form := url.Values{
+			"email":    {"alice@example.com"},
+			"password": {"secret"},
+		}.Encode()
+
+		w := doRequest(t, h, http.MethodPost, "/signup", "application/x-www-form-urlencoded", form)
+
+		require.Equal(t, http.StatusInternalServerError, w.Code)
+		require.Contains(t, w.Body.String(), msgInternal)
+		require.NotContains(t, w.Body.String(), "secret signup failure")
+		require.Contains(t, logs.String(), "secret signup failure")
+	})
+}
+
+func TestLoginPage(t *testing.T) {
+	h, _ := newTestRouter(t, &fakeSubsService{})
+
+	w := doRequest(t, h, http.MethodGet, "/login?next=%2Fsubscriptions&verified=1", "", "")
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `action="/login"`)
+	require.Contains(t, w.Body.String(), msgVerified)
+	require.Contains(t, w.Body.String(), `name="next" value="/subscriptions"`)
+	require.Contains(t, w.Body.String(), `name="csrf_token"`)
+}
+
+func TestLoginErrorPreservesEmail(t *testing.T) {
+	authSvc := &fakeAuthService{loginErr: auth.ErrInvalidCredentials}
+	h, _, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+	form := url.Values{
+		"email":    {"alice@example.com"},
+		"password": {"wrong"},
+		"next":     {"/subscriptions"},
+	}.Encode()
+
+	w := doRequest(t, h, http.MethodPost, "/login", "application/x-www-form-urlencoded", form)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.Contains(t, w.Body.String(), msgInvalidCredentials)
+	require.Contains(t, w.Body.String(), `value="alice@example.com"`)
+	require.NotContains(t, w.Body.String(), `value="wrong"`)
+	require.Contains(t, w.Body.String(), `name="next" value="/subscriptions"`)
+}
+
+func TestLoginRedirectsOnlyToLocalPaths(t *testing.T) {
+	tests := []struct {
+		next     string
+		expected string
+	}{
+		{next: "/subscriptions", expected: "/subscriptions"},
+		{next: "/subscriptions?tab=all", expected: "/subscriptions?tab=all"},
+		{next: "https://evil.example", expected: "/"},
+		{next: "//evil.example", expected: "/"},
+		{next: `/\evil.example`, expected: "/"},
+		{next: "/\\evil.example", expected: "/"},
+		{next: "/%5Cevil.example", expected: "/"},
+		{next: "/%2F%2Fevil.example", expected: "/"},
+		{next: "subscriptions", expected: "/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.next, func(t *testing.T) {
+			authSvc := &fakeAuthService{loginPair: webTokenPair()}
+			h, _, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+			form := url.Values{
+				"email":    {"alice@example.com"},
+				"password": {"correct horse battery staple"},
+				"next":     {tt.next},
+			}.Encode()
+
+			w := doRequest(t, h, http.MethodPost, "/login", "application/x-www-form-urlencoded", form)
+
+			require.Equal(t, http.StatusSeeOther, w.Code)
+			require.Equal(t, tt.expected, w.Header().Get("Location"))
+		})
+	}
+}
+
+func TestVerifyPageDoesNotRenderToken(t *testing.T) {
+	token := verificationToken(t)
+	h, _ := newTestRouter(t, &fakeSubsService{})
+
+	w := doRequest(t, h, http.MethodGet, "/verify/"+token, "", "")
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), "Verify email")
+	require.Contains(t, w.Body.String(), `name="csrf_token"`)
+	require.NotContains(t, w.Body.String(), token)
+}
+
+func TestVerifyEmail(t *testing.T) {
+	token := verificationToken(t)
+	authSvc := &fakeAuthService{}
+	h, _, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+	w := doRequest(t, h, http.MethodPost, "/verify/"+token, "", "")
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	require.Equal(t, "/login?verified=1", w.Header().Get("Location"))
+	require.Equal(t, token, authSvc.verifyToken)
+}
+
+func TestVerifyEmailRejectsInvalidToken(t *testing.T) {
+	t.Run("malformed token", func(t *testing.T) {
+		authSvc := &fakeAuthService{}
+		h, _, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+		w := doRequest(t, h, http.MethodPost, "/verify/not-a-token", "", "")
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		require.Contains(t, w.Body.String(), msgInvalidVerifyToken)
+		require.Empty(t, authSvc.verifyToken)
+	})
+
+	t.Run("unknown token", func(t *testing.T) {
+		authSvc := &fakeAuthService{verifyErr: auth.ErrInvalidToken}
+		h, _, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+		w := doRequest(t, h, http.MethodPost, "/verify/"+verificationToken(t), "", "")
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		require.Contains(t, w.Body.String(), msgInvalidVerifyToken)
+	})
+
+	t.Run("internal error", func(t *testing.T) {
+		authSvc := &fakeAuthService{verifyErr: errors.New("secret verify failure")}
+		h, logs, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+		w := doRequest(t, h, http.MethodPost, "/verify/"+verificationToken(t), "", "")
+
+		require.Equal(t, http.StatusInternalServerError, w.Code)
+		require.Contains(t, w.Body.String(), msgInternal)
+		require.NotContains(t, w.Body.String(), "secret verify failure")
+		require.Contains(t, logs.String(), "secret verify failure")
+	})
+}
+
+func TestAuthenticatedSubscribeUsesSessionEmail(t *testing.T) {
+	svc := &fakeSubsService{}
+	authSvc := &fakeAuthService{authenticated: webSession("alice@example.com")}
+	h, _, cookies, _ := newTestRouterWithAuth(t, svc, authSvc)
+
+	w := doAuthenticatedRequest(t, h, cookies, http.MethodGet, "/", "", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), "alice@example.com")
+	require.NotContains(t, w.Body.String(), `name="email"`)
+
+	form := url.Values{"repo": {"golang/go"}}.Encode()
+	w = doAuthenticatedRequest(t, h, cookies, http.MethodPost, "/subscribe",
+		"application/x-www-form-urlencoded", form)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), msgSubscribed)
+	require.Equal(t, "alice@example.com", svc.createEmail)
+	require.Equal(t, "golang/go", svc.createRepo)
+	require.True(t, svc.createVerified)
+}
+
+func TestAuthenticatedSubscribeRejectsMismatchedEmail(t *testing.T) {
+	svc := &fakeSubsService{}
+	authSvc := &fakeAuthService{authenticated: webSession("alice@example.com")}
+	h, _, cookies, _ := newTestRouterWithAuth(t, svc, authSvc)
+
+	form := url.Values{
+		"email": {"bob@example.com"},
+		"repo":  {"golang/go"},
+	}.Encode()
+	w := doAuthenticatedRequest(t, h, cookies, http.MethodPost, "/subscribe",
+		"application/x-www-form-urlencoded", form)
+
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Empty(t, svc.createEmail)
+}
+
+func TestNavigationReflectsSession(t *testing.T) {
+	t.Run("anonymous", func(t *testing.T) {
+		h, _ := newTestRouter(t, &fakeSubsService{})
+
+		w := doRequest(t, h, http.MethodGet, "/", "", "")
+
+		require.Contains(t, w.Body.String(), `href="/login"`)
+		require.Contains(t, w.Body.String(), `href="/signup"`)
+		require.NotContains(t, w.Body.String(), "/subscriptions")
+	})
+
+	t.Run("authenticated", func(t *testing.T) {
+		authSvc := &fakeAuthService{authenticated: webSession("alice@example.com")}
+		h, _, cookies, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+		w := doAuthenticatedRequest(t, h, cookies, http.MethodGet, "/", "", "")
+
+		require.Contains(t, w.Body.String(), "alice@example.com")
+		require.Contains(t, w.Body.String(), `href="/subscriptions"`)
+		require.Contains(t, w.Body.String(), `action="/logout"`)
+	})
+}
+
+func TestSubscriptionsRequiresLogin(t *testing.T) {
+	h, _ := newTestRouter(t, &fakeSubsService{})
+
+	w := doRequest(t, h, http.MethodGet, "/subscriptions", "", "")
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	require.Equal(t, "/login?next=%2Fsubscriptions", w.Header().Get("Location"))
+}
+
+func TestSubscriptionsPage(t *testing.T) {
+	svc := &fakeSubsService{listRepos: []string{"golang/go", "owner/repo"}}
+	authSvc := &fakeAuthService{authenticated: webSession("alice@example.com")}
+	h, _, cookies, _ := newTestRouterWithAuth(t, svc, authSvc)
+
+	w := doAuthenticatedRequest(t, h, cookies, http.MethodGet, "/subscriptions", "", "")
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "alice@example.com", svc.listEmail)
+	require.Contains(t, w.Body.String(), "golang/go")
+	require.Contains(t, w.Body.String(), "owner/repo")
+	require.Contains(t, w.Body.String(), `action="/subscriptions/unsubscribe"`)
+	require.Contains(t, w.Body.String(), `name="repo" value="golang/go"`)
+	require.Contains(t, w.Body.String(), `name="csrf_token"`)
+}
+
+func TestSubscriptionsPageEmpty(t *testing.T) {
+	svc := &fakeSubsService{}
+	authSvc := &fakeAuthService{authenticated: webSession("alice@example.com")}
+	h, _, cookies, _ := newTestRouterWithAuth(t, svc, authSvc)
+
+	w := doAuthenticatedRequest(t, h, cookies, http.MethodGet, "/subscriptions?unsubscribed=1", "", "")
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), msgNoSubscriptions)
+	require.Contains(t, w.Body.String(), msgUnsubscribed)
+}
+
+func TestUnsubscribeByRepo(t *testing.T) {
+	svc := &fakeSubsService{}
+	authSvc := &fakeAuthService{authenticated: webSession("alice@example.com")}
+	h, _, cookies, _ := newTestRouterWithAuth(t, svc, authSvc)
+
+	form := url.Values{"repo": {"golang/go"}}.Encode()
+	w := doAuthenticatedRequest(t, h, cookies, http.MethodPost, "/subscriptions/unsubscribe",
+		"application/x-www-form-urlencoded", form)
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	require.Equal(t, "/subscriptions?unsubscribed=1", w.Header().Get("Location"))
+	require.Equal(t, "alice@example.com", svc.byRepoEmail)
+	require.Equal(t, "golang/go", svc.byRepoRepo)
+}
+
+func TestUnsubscribeByRepoErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "invalid input",
+			err:        subs.ErrInvalidInput,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   msgInvalidInput,
+		},
+		{
+			name:       "not found",
+			err:        sql.ErrNoRows,
+			wantStatus: http.StatusNotFound,
+			wantBody:   msgSubscriptionNotFound,
+		},
+		{
+			name:       "already inactive",
+			err:        subs.ErrSubscriptionAlreadyInactive,
+			wantStatus: http.StatusConflict,
+			wantBody:   msgAlreadyUnsubscribed,
+		},
+		{
+			name:       "internal",
+			err:        errors.New("secret unsubscribe failure"),
+			wantStatus: http.StatusInternalServerError,
+			wantBody:   msgInternal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeSubsService{byRepoErr: tt.err}
+			authSvc := &fakeAuthService{authenticated: webSession("alice@example.com")}
+			h, logs, cookies, _ := newTestRouterWithAuth(t, svc, authSvc)
+
+			form := url.Values{"repo": {"golang/go"}}.Encode()
+			w := doAuthenticatedRequest(t, h, cookies, http.MethodPost, "/subscriptions/unsubscribe",
+				"application/x-www-form-urlencoded", form)
+
+			require.Equal(t, tt.wantStatus, w.Code)
+			require.Contains(t, w.Body.String(), tt.wantBody)
+			if tt.wantStatus == http.StatusInternalServerError {
+				require.NotContains(t, w.Body.String(), "secret unsubscribe failure")
+				require.Contains(t, logs.String(), "secret unsubscribe failure")
+			}
+		})
+	}
+}
+
+func TestLogoutPage(t *testing.T) {
+	h, _ := newTestRouter(t, &fakeSubsService{})
+
+	w := doRequest(t, h, http.MethodGet, "/logout", "", "")
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), msgLogoutConfirmation)
+	require.Contains(t, w.Body.String(), `action="/logout"`)
+	require.Contains(t, w.Body.String(), `name="csrf_token"`)
 }
