@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"repo-watch/internal/observability"
 	"repo-watch/internal/postgres"
@@ -20,6 +21,10 @@ type Config struct {
 	RabbitMQUrl string
 	GhApiUrl    string
 	GithubToken string
+
+	JWTSecret       []byte
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
 }
 
 func loadConfig() *Config {
@@ -44,6 +49,10 @@ func loadConfig() *Config {
 
 		GhApiUrl:    utils.Env("GH_API_URL", "https://api.github.com"),
 		GithubToken: os.Getenv("GITHUB_TOKEN"),
+
+		JWTSecret:       []byte(os.Getenv("JWT_SECRET")),
+		AccessTokenTTL:  utils.EnvDuration("ACCESS_TOKEN_TTL", 0),
+		RefreshTokenTTL: utils.EnvDuration("REFRESH_TOKEN_TTL", 0),
 	}
 }
 

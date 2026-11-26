@@ -42,21 +42,6 @@ func TestHashPasswordUsesProvidedParams(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestPasswordLengthLimits(t *testing.T) {
-	_, err := HashPassword(strings.Repeat("a", MinPasswordLength-1))
-	require.ErrorIs(t, err, ErrPasswordTooShort)
-
-	_, err = HashPassword(strings.Repeat("a", MaxPasswordLength+1))
-	require.ErrorIs(t, err, ErrPasswordTooLong)
-
-	hash, err := HashPassword(strings.Repeat("a", MinPasswordLength))
-	require.NoError(t, err)
-
-	ok, err := VerifyPassword(hash, strings.Repeat("a", MaxPasswordLength+1))
-	require.ErrorIs(t, err, ErrPasswordTooLong)
-	require.False(t, ok)
-}
-
 func TestVerifyPasswordRejectsMalformedHashes(t *testing.T) {
 	tests := []string{
 		"",

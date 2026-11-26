@@ -1,17 +1,24 @@
 // Package api provides the HTTP API for repository release subscriptions.
 //
-// The API creates pending subscriptions, queues confirmation emails, confirms
-// or deactivates subscriptions through single-use tokens, and lists active
-// subscriptions for an email address. None of the API endpoints require
-// authentication.
+// The API manages accounts with email verification and Bearer sessions, creates
+// pending subscriptions, queues confirmation emails, confirms or deactivates
+// subscriptions through single-use tokens, and lists active subscriptions for
+// an email address. Auth, logout, and account endpoints require a Bearer access
+// token.
 //
 // @title           Subscription API
 // @version         1.0.0
-// @description     API for subscribing email addresses to GitHub repository releases.
+// @description     API for managing accounts and subscribing email addresses to GitHub repository releases.
 // @BasePath        /api
 // @schemes         http https
+// @tag.name        Auth
+// @tag.description Create accounts, verify email addresses, and manage Bearer sessions.
 // @tag.name        Subscriptions
 // @tag.description Create, confirm, unsubscribe from, and list repository release subscriptions.
+// @securityDefinitions.apikey BearerAuth
+// @in              header
+// @name            Authorization
+// @description     JWT access token. Use the value returned by login or refresh with the "Bearer " prefix.
 package api
 
 import (

@@ -15,6 +15,344 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/auth/login": {
+            "post": {
+                "description": "Verifies the password and returns a short-lived Bearer access token plus a rotating refresh token.",
+                "consumes": [
+                    "application/json",
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Log in",
+                "parameters": [
+                    {
+                        "description": "Email address and password",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.loginRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Authenticated",
+                        "schema": {
+                            "$ref": "#/definitions/api.tokenResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Malformed request",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Invalid credentials",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Email address is not verified",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/logout": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Revokes the current session. Send a Bearer access token, or a refresh token in the body when the access token has expired.",
+                "consumes": [
+                    "application/json",
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Log out",
+                "parameters": [
+                    {
+                        "description": "Optional refresh token when the access token has expired",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/api.logoutRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Session revoked"
+                    },
+                    "400": {
+                        "description": "Malformed request",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid credentials",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/me": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the email address of the authenticated account.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Get the current account",
+                "responses": {
+                    "200": {
+                        "description": "Authenticated account",
+                        "schema": {
+                            "$ref": "#/definitions/api.userResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing, invalid, expired, or revoked access token",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/refresh": {
+            "post": {
+                "description": "Rotates the refresh token and returns a new access/refresh pair. Reuse of an old refresh token revokes the session.",
+                "consumes": [
+                    "application/json",
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Refresh a session",
+                "parameters": [
+                    {
+                        "description": "Refresh token",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.refreshRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Rotated token pair",
+                        "schema": {
+                            "$ref": "#/definitions/api.tokenResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Malformed request",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Invalid, expired, or reused refresh token",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/signup": {
+            "post": {
+                "description": "Creates an unverified account and queues a verification email. The response does not reveal whether the email already has an account.",
+                "consumes": [
+                    "application/json",
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Create an account",
+                "parameters": [
+                    {
+                        "description": "Email address and password",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.signupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Verification email queued",
+                        "schema": {
+                            "$ref": "#/definitions/api.messageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Malformed request or invalid email/password",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/verify-resend": {
+            "post": {
+                "description": "Rotates and resends the verification email for an unverified account. The response is generic for unknown and verified accounts.",
+                "consumes": [
+                    "application/json",
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Resend a verification email",
+                "parameters": [
+                    {
+                        "description": "Email address",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.resendVerificationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Verification email queued when needed",
+                        "schema": {
+                            "$ref": "#/definitions/api.messageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Malformed request or invalid email",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/verify/{token}": {
+            "post": {
+                "description": "Marks the account as verified using the token from the verification email.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Verify an email address",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Verification token from the email",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Email verified",
+                        "schema": {
+                            "$ref": "#/definitions/api.messageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid or expired verification token",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/confirm/{token}": {
             "post": {
                 "description": "Confirms a subscription using the token from the confirmation email.",
@@ -266,10 +604,44 @@ const docTemplate = `{
         "api.errorResponse": {
             "type": "object",
             "properties": {
+                "code": {
+                    "description": "Optional machine-readable error code for authentication failures.",
+                    "type": "string",
+                    "example": "invalid_credentials"
+                },
                 "error": {
                     "description": "Human-readable error message.",
                     "type": "string",
                     "example": "invalid email"
+                }
+            }
+        },
+        "api.loginRequest": {
+            "type": "object",
+            "required": [
+                "email",
+                "password"
+            ],
+            "properties": {
+                "email": {
+                    "description": "Account email address.",
+                    "type": "string",
+                    "example": "alice@example.com"
+                },
+                "password": {
+                    "description": "Account password.",
+                    "type": "string",
+                    "example": "correct horse battery staple"
+                }
+            }
+        },
+        "api.logoutRequest": {
+            "type": "object",
+            "properties": {
+                "refresh_token": {
+                    "description": "Refresh token used to identify the session to revoke.",
+                    "type": "string",
+                    "example": "..."
                 }
             }
         },
@@ -280,6 +652,51 @@ const docTemplate = `{
                     "description": "Human-readable result message.",
                     "type": "string",
                     "example": "check email to confirm subscription"
+                }
+            }
+        },
+        "api.refreshRequest": {
+            "type": "object",
+            "required": [
+                "refresh_token"
+            ],
+            "properties": {
+                "refresh_token": {
+                    "description": "Refresh token returned by login or a previous refresh.",
+                    "type": "string",
+                    "example": "..."
+                }
+            }
+        },
+        "api.resendVerificationRequest": {
+            "type": "object",
+            "required": [
+                "email"
+            ],
+            "properties": {
+                "email": {
+                    "description": "Email address to resend verification to.",
+                    "type": "string",
+                    "example": "alice@example.com"
+                }
+            }
+        },
+        "api.signupRequest": {
+            "type": "object",
+            "required": [
+                "email",
+                "password"
+            ],
+            "properties": {
+                "email": {
+                    "description": "Email address for the new account.",
+                    "type": "string",
+                    "example": "alice@example.com"
+                },
+                "password": {
+                    "description": "Password",
+                    "type": "string",
+                    "example": "correct horse battery staple"
                 }
             }
         },
@@ -302,9 +719,69 @@ const docTemplate = `{
                     "example": "golang/go"
                 }
             }
+        },
+        "api.tokenResponse": {
+            "type": "object",
+            "properties": {
+                "access_token": {
+                    "description": "Short-lived JWT access token.",
+                    "type": "string",
+                    "example": "..."
+                },
+                "expires_in": {
+                    "description": "Access-token lifetime in seconds.",
+                    "type": "integer",
+                    "example": 600
+                },
+                "refresh_expires_in": {
+                    "description": "Refresh-token lifetime in seconds.",
+                    "type": "integer",
+                    "example": 2592000
+                },
+                "refresh_token": {
+                    "description": "Rotating refresh token.",
+                    "type": "string",
+                    "example": "..."
+                },
+                "token_type": {
+                    "description": "Token type; always Bearer.",
+                    "type": "string",
+                    "example": "Bearer"
+                },
+                "user": {
+                    "description": "Authenticated user.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.userResponse"
+                        }
+                    ]
+                }
+            }
+        },
+        "api.userResponse": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "description": "Normalized account email address.",
+                    "type": "string",
+                    "example": "alice@example.com"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "description": "JWT access token. Use the value returned by login or refresh with the \"Bearer \" prefix.",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
         }
     },
     "tags": [
+        {
+            "description": "Create accounts, verify email addresses, and manage Bearer sessions.",
+            "name": "Auth"
+        },
         {
             "description": "Create, confirm, unsubscribe from, and list repository release subscriptions.",
             "name": "Subscriptions"
@@ -319,7 +796,7 @@ var SwaggerInfo = &swag.Spec{
 	BasePath:         "/api",
 	Schemes:          []string{"http", "https"},
 	Title:            "Subscription API",
-	Description:      "API for subscribing email addresses to GitHub repository releases.",
+	Description:      "API for managing accounts and subscribing email addresses to GitHub repository releases.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

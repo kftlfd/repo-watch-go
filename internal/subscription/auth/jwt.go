@@ -88,7 +88,7 @@ func (m *JWTManager) IssueAt(subject string, sessionID int64, issuedAt time.Time
 		return "", fmt.Errorf("%w: missing subject or session", ErrInvalidToken)
 	}
 
-	jti, err := securetoken.Generate(jtiBytes)
+	jti, err := securetoken.Generate(jwtIDBytes)
 	if err != nil {
 		return "", err
 	}

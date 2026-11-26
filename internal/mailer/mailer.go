@@ -91,6 +91,16 @@ var ErrInvalidPayloadData = errors.New("invalid payload data")
 func renderEmail(payload events.EventEmailQueuedPayload, baseURL string) (Email, error) {
 	switch payload.Type {
 
+	case emails.EmailVerifyAccount:
+		var data emails.EmailVerifyAccountData
+		if err := json.Unmarshal(payload.Data, &data); err != nil {
+			return Email{}, ErrInvalidPayloadData
+		}
+		return Email{
+			subject: "Verify your email address",
+			body:    fmt.Sprintf("To verify your email address, open: %v", joinURL(baseURL, "/verify/"+url.PathEscape(data.VerifyToken))),
+		}, nil
+
 	case emails.EmailConfirmSubscription:
 		var data emails.EmailConfirmSubscriptionData
 		if err := json.Unmarshal(payload.Data, &data); err != nil {

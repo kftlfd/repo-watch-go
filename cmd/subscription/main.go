@@ -22,6 +22,7 @@ import (
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/api"
+	"repo-watch/internal/subscription/auth"
 	"repo-watch/internal/subscription/cleanup"
 	"repo-watch/internal/subscription/db/dbGen"
 	"repo-watch/internal/subscription/db/migrations"
@@ -139,6 +140,19 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		Queries:      queries,
 	})
 
+	authSvc, err := auth.NewService(auth.Deps{
+		DB:      db,
+		Queries: queries,
+		Config: auth.Config{
+			JWTSecret:  cfg.JWTSecret,
+			AccessTTL:  cfg.AccessTokenTTL,
+			RefreshTTL: cfg.RefreshTokenTTL,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create auth service: %w", err)
+	}
+
 	outboxDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherDeps{
 		Logger:    logger.With("module", "subscription_outbox"),
 		Store:     outbox.NewSubscriptionOutbox(queries),
@@ -188,6 +202,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 
 	api.RegisterRoutes(router.Group("/api"), api.Deps{
 		SubsService: subsSvc,
+		AuthService: authSvc,
 		DocsHost:    cfg.APIHost,
 	})
 	web.RegisterRoutes(router.Group("/"), web.Deps{

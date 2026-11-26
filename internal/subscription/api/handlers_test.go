@@ -64,6 +64,12 @@ func (fakeMetrics) HTTPRequest(string, string, int, time.Duration) {}
 func newTestHandler(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer) {
 	t.Helper()
 
+	return newTestHandlerWithAuth(t, svc, nil)
+}
+
+func newTestHandlerWithAuth(t *testing.T, svc subsService, authSvc authService) (http.Handler, *bytes.Buffer) {
+	t.Helper()
+
 	gin.SetMode(gin.TestMode)
 
 	logs := &bytes.Buffer{}
@@ -75,6 +81,7 @@ func newTestHandler(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer)
 
 	RegisterRoutes(router.Group("/api"), Deps{
 		SubsService: svc,
+		AuthService: authSvc,
 	})
 	router.NoRoute(NotFound)
 

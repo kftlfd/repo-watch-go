@@ -3,16 +3,26 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"repo-watch/internal/emails"
+	"repo-watch/internal/events"
 	"repo-watch/internal/securetoken"
 	"repo-watch/internal/subscription/db/dbGen"
+	"repo-watch/internal/subscription/identity"
+	"repo-watch/internal/subscription/outbox"
 )
 
 const (
+	// MinPasswordLength is the default minimum accepted password length in bytes.
+	MinPasswordLength = 1
+
+	// MaxPasswordLength is the default maximum accepted password length in bytes.
+	MaxPasswordLength = 1024
+
 	// DefaultIssuer and DefaultAudience identify tokens issued by this service.
 	DefaultIssuer   = "repo-watch"
 	DefaultAudience = "repo-watch-api"
@@ -23,12 +33,28 @@ const (
 	// DefaultRefreshTTL is the sliding lifetime of a refresh token and session.
 	DefaultRefreshTTL = 30 * 24 * time.Hour
 
-	defaultJWTLeeway = 30 * time.Second
+	// DefaultJWTLeeway tolerates small clock skew when validating JWT timestamps.
+	DefaultJWTLeeway = 30 * time.Second
 )
 
-var ErrTokenReused = errors.New("refresh token reused")
+var (
+	ErrTokenReused           = errors.New("refresh token reused")
+	ErrInvalidCredentials    = errors.New("invalid credentials")
+	ErrEmailUnverified       = errors.New("email not verified")
+	ErrInvalidPasswordLength = errors.New("invalid password length")
+)
 
-// Config controls token lifetimes and JWT validation.
+// dummyPasswordHash is verified for unknown accounts so that login takes
+// roughly the same time whether or not the email exists.
+var dummyPasswordHash = func() string {
+	hash, err := HashPassword("invalid-password-placeholder")
+	if err != nil {
+		panic(fmt.Sprintf("create dummy password hash: %v", err))
+	}
+	return hash
+}()
+
+// Config controls token lifetimes, password validation, and JWT validation.
 type Config struct {
 	JWTSecret  []byte
 	Issuer     string
@@ -37,6 +63,9 @@ type Config struct {
 	RefreshTTL time.Duration
 	Leeway     time.Duration
 	Now        func() time.Time
+
+	MinPasswordLength int
+	MaxPasswordLength int
 }
 
 // Deps are the dependencies of the auth service.
@@ -49,12 +78,14 @@ type Deps struct {
 // Service creates sessions, issues token pairs, rotates refresh tokens, and
 // validates access tokens against the current session row.
 type Service struct {
-	db         *sql.DB
-	q          *dbGen.Queries
-	jwt        *JWTManager
-	accessTTL  time.Duration
-	refreshTTL time.Duration
-	now        func() time.Time
+	db                *sql.DB
+	q                 *dbGen.Queries
+	jwt               *JWTManager
+	accessTTL         time.Duration
+	refreshTTL        time.Duration
+	minPasswordLength int
+	maxPasswordLength int
+	now               func() time.Time
 }
 
 // TokenPair is a newly issued access/refresh pair.
@@ -91,10 +122,23 @@ func NewService(d Deps) (*Service, error) {
 		cfg.Leeway = 0
 	}
 	if cfg.Leeway == 0 {
-		cfg.Leeway = defaultJWTLeeway
+		cfg.Leeway = DefaultJWTLeeway
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.MinPasswordLength <= 0 {
+		cfg.MinPasswordLength = MinPasswordLength
+	}
+	if cfg.MaxPasswordLength <= 0 {
+		cfg.MaxPasswordLength = MaxPasswordLength
+	}
+	if cfg.MinPasswordLength > cfg.MaxPasswordLength {
+		return nil, fmt.Errorf(
+			"min password length %d exceeds max %d",
+			cfg.MinPasswordLength,
+			cfg.MaxPasswordLength,
+		)
 	}
 
 	jwt, err := NewJWTManager(cfg.JWTSecret, cfg.Issuer, cfg.Audience, cfg.Leeway)
@@ -103,23 +147,28 @@ func NewService(d Deps) (*Service, error) {
 	}
 
 	return &Service{
-		db:         d.DB,
-		q:          d.Queries,
-		jwt:        jwt,
-		accessTTL:  cfg.AccessTTL,
-		refreshTTL: cfg.RefreshTTL,
-		now:        cfg.Now,
+		db:                d.DB,
+		q:                 d.Queries,
+		jwt:               jwt,
+		accessTTL:         cfg.AccessTTL,
+		refreshTTL:        cfg.RefreshTTL,
+		minPasswordLength: cfg.MinPasswordLength,
+		maxPasswordLength: cfg.MaxPasswordLength,
+		now:               cfg.Now,
 	}, nil
 }
 
-// CreateSession creates a session and refresh token for an existing user and
-// returns a new token pair.
-func (s *Service) CreateSession(ctx context.Context, email string) (TokenPair, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
-		return TokenPair{}, fmt.Errorf("%w: empty email", ErrInvalidToken)
+func (s *Service) validatePasswordLength(password string) error {
+	if len(password) < s.minPasswordLength || len(password) > s.maxPasswordLength {
+		return ErrInvalidPasswordLength
 	}
+	return nil
+}
 
+// CreateSession creates a session and refresh token for an existing user and
+// returns a new token pair. Callers must enforce email verification; Login is
+// currently the verification boundary, and Authenticate trusts created sessions.
+func (s *Service) CreateSession(ctx context.Context, email identity.Email) (TokenPair, error) {
 	now := s.now()
 	expiresAt := now.Add(s.refreshTTL)
 
@@ -132,7 +181,7 @@ func (s *Service) CreateSession(ctx context.Context, email string) (TokenPair, e
 	qtx := s.q.WithTx(tx)
 
 	session, err := qtx.CreateSession(ctx, dbGen.CreateSessionParams{
-		UserEmail: email,
+		UserEmail: email.String(),
 		ExpiresAt: expiresAt,
 	})
 	if err != nil {
@@ -149,6 +198,235 @@ func (s *Service) CreateSession(ctx context.Context, email string) (TokenPair, e
 	}
 
 	return pair, nil
+}
+
+// Signup creates an unverified user and queues a verification email. Existing
+// unverified users get a rotated token and a new email. Existing verified
+// users are left alone; callers must return the same generic response for
+// every case.
+func (s *Service) Signup(ctx context.Context, email identity.Email, password string) error {
+	if err := s.validatePasswordLength(password); err != nil {
+		return err
+	}
+
+	passwordHash, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin signup tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	qtx := s.q.WithTx(tx)
+
+	_, err = qtx.CreateUser(ctx, dbGen.CreateUserParams{
+		Email:        email.String(),
+		PasswordHash: passwordHash,
+	})
+	switch {
+	case err == nil:
+	case errors.Is(err, sql.ErrNoRows):
+		user, lookupErr := qtx.GetUserByEmailForUpdate(ctx, email.String())
+		if errors.Is(lookupErr, sql.ErrNoRows) {
+			return nil
+		}
+		if lookupErr != nil {
+			return fmt.Errorf("load existing user: %w", lookupErr)
+		}
+		if user.EmailVerifiedAt.Valid {
+			return nil
+		}
+	default:
+		return fmt.Errorf("create user: %w", err)
+	}
+
+	if err = s.queueVerificationEmail(ctx, qtx, email); err != nil {
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit signup tx: %w", err)
+	}
+
+	return nil
+}
+
+// VerifyEmail consumes a verification token and marks the user's email as
+// verified. Invalid and expired tokens both return ErrInvalidToken.
+func (s *Service) VerifyEmail(ctx context.Context, token string) error {
+	if !securetoken.Validate(token, userTokenVerifyBytes) {
+		return ErrInvalidToken
+	}
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin verify tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	qtx := s.q.WithTx(tx)
+
+	userToken, err := qtx.FindUserTokenForUpdate(ctx, dbGen.FindUserTokenForUpdateParams{
+		TokenType: UserTokenTypeVerify,
+		TokenHash: securetoken.Hash(token),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidToken
+	}
+	if err != nil {
+		return fmt.Errorf("find verification token: %w", err)
+	}
+
+	if !s.now().Before(userToken.CreatedAt.Add(UserTokenVerifyTTL)) {
+		return ErrInvalidToken
+	}
+
+	if _, err = qtx.MarkUserEmailVerified(ctx, userToken.UserEmail); errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidToken
+	} else if err != nil {
+		return fmt.Errorf("mark email verified: %w", err)
+	}
+
+	if err = qtx.DeleteUserToken(ctx, userToken.ID); err != nil {
+		return fmt.Errorf("consume verification token: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit verify tx: %w", err)
+	}
+
+	return nil
+}
+
+// ResendVerification rotates and resends a verification token for an existing
+// unverified user. Unknown or verified users are ignored so the response does
+// not reveal whether an account exists.
+func (s *Service) ResendVerification(ctx context.Context, email identity.Email) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin resend tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	qtx := s.q.WithTx(tx)
+
+	user, err := qtx.GetUserByEmailForUpdate(ctx, email.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load user: %w", err)
+	}
+	if user.EmailVerifiedAt.Valid {
+		return nil
+	}
+
+	if err = s.queueVerificationEmail(ctx, qtx, email); err != nil {
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit resend tx: %w", err)
+	}
+
+	return nil
+}
+
+// Login verifies a password and creates a session for a verified user.
+// Unverified users are rejected only after their password has been checked.
+func (s *Service) Login(ctx context.Context, email identity.Email, password string) (TokenPair, error) {
+	if err := s.validatePasswordLength(password); err != nil {
+		return TokenPair{}, ErrInvalidCredentials
+	}
+
+	user, err := s.q.GetUserByEmail(ctx, email.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		_, _ = VerifyPassword(dummyPasswordHash, password)
+		return TokenPair{}, ErrInvalidCredentials
+	}
+	if err != nil {
+		return TokenPair{}, fmt.Errorf("load user: %w", err)
+	}
+
+	ok, err := VerifyPassword(user.PasswordHash, password)
+	if err != nil {
+		return TokenPair{}, fmt.Errorf("verify password: %w", err)
+	}
+	if !ok {
+		return TokenPair{}, ErrInvalidCredentials
+	}
+	if !user.EmailVerifiedAt.Valid {
+		return TokenPair{}, ErrEmailUnverified
+	}
+
+	return s.CreateSession(ctx, email)
+}
+
+// RevokeSessionByRefreshToken revokes the session that owns a refresh token.
+// It is used by logout when the access token has already expired.
+func (s *Service) RevokeSessionByRefreshToken(ctx context.Context, rawRefreshToken string) error {
+	if !securetoken.Validate(rawRefreshToken, refreshTokenBytes) {
+		return ErrInvalidToken
+	}
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin logout tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	qtx := s.q.WithTx(tx)
+
+	refreshToken, err := qtx.GetRefreshTokenByHashForUpdate(ctx, securetoken.Hash(rawRefreshToken))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidToken
+	}
+	if err != nil {
+		return fmt.Errorf("find refresh token: %w", err)
+	}
+
+	if err = s.revokeSession(ctx, qtx, refreshToken.SessionID); err != nil {
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit logout tx: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Service) queueVerificationEmail(ctx context.Context, qtx *dbGen.Queries, email identity.Email) error {
+	rawToken, tokenHash, err := NewVerificationToken()
+	if err != nil {
+		return fmt.Errorf("generate verification token: %w", err)
+	}
+
+	if _, err = qtx.UpsertUserToken(ctx, dbGen.UpsertUserTokenParams{
+		UserEmail: email.String(),
+		TokenType: UserTokenTypeVerify,
+		TokenHash: tokenHash,
+	}); err != nil {
+		return fmt.Errorf("store verification token: %w", err)
+	}
+
+	data, err := json.Marshal(emails.EmailVerifyAccountData{VerifyToken: rawToken})
+	if err != nil {
+		return fmt.Errorf("marshal verification email: %w", err)
+	}
+
+	if err = outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
+		Recipient: email.String(),
+		Type:      emails.EmailVerifyAccount,
+		Data:      data,
+	}); err != nil {
+		return fmt.Errorf("queue verification email: %w", err)
+	}
+
+	return nil
 }
 
 // RefreshSession rotates a refresh token and returns a new pair. Reusing an

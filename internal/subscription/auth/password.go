@@ -15,12 +15,6 @@ import (
 )
 
 const (
-	// MinPasswordLength is the minimum accepted password length in bytes.
-	MinPasswordLength = 12
-
-	// MaxPasswordLength is the maximum accepted password length in bytes.
-	MaxPasswordLength = 1024
-
 	defaultSaltLength = 16
 	defaultKeyLength  = 32
 
@@ -32,8 +26,6 @@ const (
 )
 
 var (
-	ErrPasswordTooShort    = errors.New("password too short")
-	ErrPasswordTooLong     = errors.New("password too long")
 	ErrInvalidPasswordHash = errors.New("invalid password hash")
 )
 
@@ -67,9 +59,6 @@ func HashPassword(password string) (string, error) {
 // HashPasswordWithParams hashes password with params and returns a PHC string
 // in the form $argon2id$v=19$m=...,t=...,p=...$salt$hash.
 func HashPasswordWithParams(password string, params PasswordParams) (string, error) {
-	if err := validatePasswordLength(password); err != nil {
-		return "", err
-	}
 	if err := validateParams(params); err != nil {
 		return "", err
 	}
@@ -102,10 +91,6 @@ func HashPasswordWithParams(password string, params PasswordParams) (string, err
 // VerifyPassword reports whether password matches the PHC-encoded hash. A
 // malformed hash returns ErrInvalidPasswordHash.
 func VerifyPassword(encoded, password string) (bool, error) {
-	if len(password) > MaxPasswordLength {
-		return false, ErrPasswordTooLong
-	}
-
 	params, salt, expected, err := parsePasswordHash(encoded)
 	if err != nil {
 		return false, err
@@ -121,16 +106,6 @@ func VerifyPassword(encoded, password string) (bool, error) {
 	)
 
 	return subtle.ConstantTimeCompare(actual, expected) == 1, nil
-}
-
-func validatePasswordLength(password string) error {
-	if len(password) < MinPasswordLength {
-		return ErrPasswordTooShort
-	}
-	if len(password) > MaxPasswordLength {
-		return ErrPasswordTooLong
-	}
-	return nil
 }
 
 func validateParams(params PasswordParams) error {
