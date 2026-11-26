@@ -89,6 +89,13 @@ func (f *fakeAuthService) Authenticate(_ context.Context, accessToken string) (a
 	return f.authenticated, f.authenticateErr
 }
 
+func authSessionFor(email string) auth.AuthenticatedSession {
+	return auth.AuthenticatedSession{
+		Session: dbGen.Session{ID: 42, UserEmail: email},
+		User:    dbGen.User{Email: email},
+	}
+}
+
 func testTokenPair() auth.TokenPair {
 	return auth.TokenPair{
 		UserEmail:        "alice@example.com",

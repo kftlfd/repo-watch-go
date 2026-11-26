@@ -26,30 +26,50 @@ type Authenticator interface {
 // session in the request context.
 func BearerAuth(authenticator Authenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token, ok := ParseBearerToken(c.GetHeader("Authorization"))
-		if !ok {
-			abortUnauthorized(c)
+		if !requireBearerAuth(c, authenticator) {
 			return
 		}
-
-		authenticated, err := authenticator.Authenticate(c.Request.Context(), token)
-		if errors.Is(err, ErrInvalidToken) {
-			abortUnauthorized(c)
-			return
-		}
-		if err != nil {
-			httpserver.RecordError(c, "authenticate request", err)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": internalError})
-			return
-		}
-
-		c.Set(authSessionKey, authenticated)
 		c.Next()
 	}
 }
 
+// OptionalBearerAuth authenticates a request when an Authorization header is
+// present but allows requests without one to continue anonymously.
+func OptionalBearerAuth(authenticator Authenticator) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if strings.TrimSpace(c.GetHeader("Authorization")) != "" {
+			if !requireBearerAuth(c, authenticator) {
+				return
+			}
+		}
+		c.Next()
+	}
+}
+
+func requireBearerAuth(c *gin.Context, authenticator Authenticator) bool {
+	token, ok := ParseBearerToken(c.GetHeader("Authorization"))
+	if !ok {
+		abortUnauthorized(c)
+		return false
+	}
+
+	authenticated, err := authenticator.Authenticate(c.Request.Context(), token)
+	if errors.Is(err, ErrInvalidToken) {
+		abortUnauthorized(c)
+		return false
+	}
+	if err != nil {
+		httpserver.RecordError(c, "authenticate request", err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": internalError})
+		return false
+	}
+
+	c.Set(authSessionKey, authenticated)
+	return true
+}
+
 // SessionFromContext returns the authenticated session installed by
-// BearerAuth.
+// BearerAuth or OptionalBearerAuth.
 func SessionFromContext(c *gin.Context) (AuthenticatedSession, bool) {
 	value, ok := c.Get(authSessionKey)
 	if !ok {
@@ -79,8 +99,5 @@ func ParseBearerToken(header string) (string, bool) {
 
 func abortUnauthorized(c *gin.Context) {
 	c.Header("WWW-Authenticate", "Bearer")
-	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-		"error": unauthorized,
-		"code":  unauthorized,
-	})
+	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": unauthorized, "code": unauthorized})
 }

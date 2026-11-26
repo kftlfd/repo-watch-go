@@ -12,8 +12,9 @@ import (
 
 type subsService interface {
 	ConfirmSubscription(ctx context.Context, token string) error
-	CreateSubscription(ctx context.Context, email identity.Email, repo string) error
+	CreateSubscription(ctx context.Context, email identity.Email, repo string, verified bool) error
 	DeactivateSubscription(ctx context.Context, token string) error
+	DeactivateSubscriptionByRepo(ctx context.Context, email identity.Email, repo string) error
 	GetSubscriptionsList(ctx context.Context, email identity.Email) ([]string, error)
 }
 
@@ -47,13 +48,15 @@ func RegisterRoutes(rg *gin.RouterGroup, d Deps) {
 		authService: d.AuthService,
 	}
 
-	rg.POST("/subscribe", h.handleCreateSubscription)
+	rg.POST("/subscribe", auth.OptionalBearerAuth(d.AuthService), h.handleCreateSubscription)
 	rg.POST("/confirm/:token", h.handleConfirmSubscription)
 	rg.POST("/unsubscribe/:token", h.handleDeactivateSubscription)
-	rg.GET("/subscriptions", h.handleListSubscriptions)
 
-	authRoutes := rg.Group("/auth")
-	authRoutes.Use(noStore())
+	subscriptionRoutes := rg.Group("", noStore(), auth.BearerAuth(d.AuthService))
+	subscriptionRoutes.GET("/subscriptions", h.handleListSubscriptions)
+	subscriptionRoutes.POST("/subscriptions/unsubscribe", h.handleUnsubscribeByRepo)
+
+	authRoutes := rg.Group("/auth", noStore())
 	authRoutes.POST("/signup", h.handleSignup)
 	authRoutes.POST("/verify-resend", h.handleResendVerification)
 	authRoutes.POST("/verify/:token", h.handleVerifyEmail)

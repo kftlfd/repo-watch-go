@@ -10,7 +10,7 @@ import (
 
 type subsService interface {
 	ConfirmSubscription(ctx context.Context, token string) error
-	CreateSubscription(ctx context.Context, email identity.Email, repo string) error
+	CreateSubscription(ctx context.Context, email identity.Email, repo string, verified bool) error
 	DeactivateSubscription(ctx context.Context, token string) error
 }
 

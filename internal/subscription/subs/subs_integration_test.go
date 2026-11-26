@@ -81,7 +81,7 @@ func TestCreateSubscription(t *testing.T) {
 	email := mustEmail(t, "alice@example.com")
 	repo := "owner/repository"
 
-	err := svc.CreateSubscription(ctx, email, repo)
+	err := svc.CreateSubscription(ctx, email, repo, false)
 	require.NoError(t, err)
 
 	dbRepo, err := db.Queries.GetRepositoryByID(ctx, repo)
@@ -112,7 +112,7 @@ func TestEmailIsNormalized(t *testing.T) {
 
 	email := mustEmail(t, "ALICE@Example.COM")
 	require.Equal(t, "alice@example.com", email.String())
-	require.NoError(t, svc.CreateSubscription(ctx, email, "owner/repository"))
+	require.NoError(t, svc.CreateSubscription(ctx, email, "owner/repository", false))
 
 	dbSub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
 		Email:        email.String(),
@@ -133,6 +133,157 @@ func TestEmailIsNormalized(t *testing.T) {
 	require.ErrorIs(t, err, identity.ErrInvalidEmail)
 }
 
+func TestCreateSubscriptionVerifiedActivatesImmediately(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	svc := newTestService(db)
+	email := mustEmail(t, "alice@example.com")
+
+	require.NoError(t, svc.CreateSubscription(ctx, email, "owner/repository", true))
+
+	sub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+		Email:        email.String(),
+		RepositoryID: "owner/repository",
+	})
+	require.NoError(t, err)
+	require.True(t, sub.Active)
+	require.Equal(t, int32(1), sub.ActiveVersion)
+
+	_, err = db.Queries.GetSubscriptionToken(ctx, dbGen.GetSubscriptionTokenParams{
+		SubscriptionID: sub.ID,
+		TokenType:      subs.TokenTypeConfirm,
+	})
+	require.ErrorIs(t, err, sql.ErrNoRows)
+
+	unsubToken, err := db.Queries.GetSubscriptionToken(ctx, dbGen.GetSubscriptionTokenParams{
+		SubscriptionID: sub.ID,
+		TokenType:      subs.TokenTypeUnsub,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, unsubToken.TokenHash)
+
+	repo, err := db.Queries.GetRepositoryByID(ctx, "owner/repository")
+	require.NoError(t, err)
+	require.Equal(t, int32(1), repo.ActiveSubscriptionsCount)
+	require.Equal(t, int32(1), repo.ActiveVersion)
+
+	confirmEmails, err := db.Queries.GetEventTypeCount(ctx, events.EventEmailQueued)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), confirmEmails)
+
+	subChanged, err := db.Queries.GetEventTypeCount(ctx, events.EventSubscriptionChanged)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), subChanged)
+
+	repoChanged, err := db.Queries.GetEventTypeCount(ctx, events.EventRepositoryChanged)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), repoChanged)
+}
+
+func TestCreateSubscriptionDuplicateBehaviorDependsOnVerified(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	svc := newTestService(db)
+	email := mustEmail(t, "alice@example.com")
+
+	_, confirmToken := createPendingSubscription(t, ctx, db, svc, email, "owner/repository")
+	confirmSubscription(t, ctx, db, svc, confirmToken)
+
+	subBefore, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+		Email:        email.String(),
+		RepositoryID: "owner/repository",
+	})
+	require.NoError(t, err)
+
+	emailsBefore, err := db.Queries.GetEventTypeCount(ctx, events.EventEmailQueued)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.CreateSubscription(ctx, email, "owner/repository", false))
+
+	subAfter, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+		Email:        email.String(),
+		RepositoryID: "owner/repository",
+	})
+	require.NoError(t, err)
+	require.True(t, subAfter.Active)
+	require.Equal(t, subBefore.ActiveVersion, subAfter.ActiveVersion)
+
+	emailsAfter, err := db.Queries.GetEventTypeCount(ctx, events.EventEmailQueued)
+	require.NoError(t, err)
+	require.Equal(t, emailsBefore, emailsAfter)
+
+	require.ErrorIs(t, svc.CreateSubscription(ctx, email, "owner/repository", true), subs.ErrSubscriptionConflict)
+}
+
+func TestDeactivateSubscriptionByRepo(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	svc := newTestService(db)
+	email := mustEmail(t, "alice@example.com")
+
+	_, confirmToken := createPendingSubscription(t, ctx, db, svc, email, "owner/repository")
+	confirmSubscription(t, ctx, db, svc, confirmToken)
+
+	require.NoError(t, svc.DeactivateSubscriptionByRepo(ctx, email, "OWNER/Repository"))
+
+	sub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+		Email:        email.String(),
+		RepositoryID: "owner/repository",
+	})
+	require.NoError(t, err)
+	require.False(t, sub.Active)
+
+	repo, err := db.Queries.GetRepositoryByID(ctx, "owner/repository")
+	require.NoError(t, err)
+	require.Equal(t, int32(0), repo.ActiveSubscriptionsCount)
+
+	_, err = db.Queries.GetSubscriptionToken(ctx, dbGen.GetSubscriptionTokenParams{
+		SubscriptionID: sub.ID,
+		TokenType:      subs.TokenTypeUnsub,
+	})
+	require.ErrorIs(t, err, sql.ErrNoRows)
+
+	require.ErrorIs(t,
+		svc.DeactivateSubscriptionByRepo(ctx, email, "owner/repository"),
+		subs.ErrSubscriptionAlreadyInactive,
+	)
+	require.ErrorIs(t,
+		svc.DeactivateSubscriptionByRepo(ctx, email, "owner/missing"),
+		sql.ErrNoRows,
+	)
+}
+
+func TestSubscriptionsAreIsolatedByEmail(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	svc := newTestService(db)
+	alice := mustEmail(t, "alice@example.com")
+	bob := mustEmail(t, "bob@example.com")
+
+	_, confirmToken := createPendingSubscription(t, ctx, db, svc, alice, "owner/repository")
+	confirmSubscription(t, ctx, db, svc, confirmToken)
+
+	repos, err := svc.GetSubscriptionsList(ctx, bob)
+	require.NoError(t, err)
+	require.Empty(t, repos)
+
+	require.ErrorIs(t,
+		svc.DeactivateSubscriptionByRepo(ctx, bob, "owner/repository"),
+		sql.ErrNoRows,
+	)
+
+	sub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+		Email:        alice.String(),
+		RepositoryID: "owner/repository",
+	})
+	require.NoError(t, err)
+	require.True(t, sub.Active)
+
+	repo, err := db.Queries.GetRepositoryByID(ctx, "owner/repository")
+	require.NoError(t, err)
+	require.Equal(t, int32(1), repo.ActiveSubscriptionsCount)
+}
+
 func TestCreateSubscriptionSkipsGithubForKnownRepository(t *testing.T) {
 	db := newTestDB(t)
 
@@ -145,10 +296,10 @@ func TestCreateSubscriptionSkipsGithubForKnownRepository(t *testing.T) {
 		Queries:      db.Queries,
 	})
 
-	require.NoError(t, svc.CreateSubscription(ctx, mustEmail(t, "alice@example.com"), "owner/repository"))
+	require.NoError(t, svc.CreateSubscription(ctx, mustEmail(t, "alice@example.com"), "owner/repository", false))
 
 	gh.err = errors.New("github must not be called for a known repository")
-	require.NoError(t, svc.CreateSubscription(ctx, mustEmail(t, "bob@example.com"), "owner/repository"))
+	require.NoError(t, svc.CreateSubscription(ctx, mustEmail(t, "bob@example.com"), "owner/repository", false))
 
 	dbRepo, err := db.Queries.GetRepositoryByID(ctx, "owner/repository")
 	require.NoError(t, err)
@@ -195,16 +346,17 @@ func TestCreateSubscriptionMapsGithubErrors(t *testing.T) {
 				Queries:      db.Queries,
 			})
 
-			err := svc.CreateSubscription(ctx, mustEmail(t, "alice@example.com"), "owner/repository")
+			err := svc.CreateSubscription(ctx, mustEmail(t, "alice@example.com"), "owner/repository", false)
 			require.ErrorIs(t, err, tt.want)
 		})
 	}
 }
 
 type testService interface {
-	CreateSubscription(ctx context.Context, email identity.Email, repo string) error
+	CreateSubscription(ctx context.Context, email identity.Email, repo string, verified bool) error
 	ConfirmSubscription(ctx context.Context, token string) error
 	DeactivateSubscription(ctx context.Context, token string) error
+	DeactivateSubscriptionByRepo(ctx context.Context, email identity.Email, repo string) error
 	GetSubscriptionsList(ctx context.Context, email identity.Email) ([]string, error)
 }
 
@@ -219,7 +371,7 @@ func newTestService(db *testDB) testService {
 func createPendingSubscription(t *testing.T, ctx context.Context, db *testDB, svc testService, email identity.Email, repo string) (dbGen.Subscription, string) {
 	t.Helper()
 
-	require.NoError(t, svc.CreateSubscription(ctx, email, repo))
+	require.NoError(t, svc.CreateSubscription(ctx, email, repo, false))
 
 	dbSub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
 		Email:        email.String(),

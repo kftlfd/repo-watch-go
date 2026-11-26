@@ -55,7 +55,7 @@ func (h *webHandler) handleCreateSubscription(c *gin.Context) {
 		return
 	}
 
-	if err := h.subsService.CreateSubscription(c.Request.Context(), email, form.Repo); err != nil {
+	if err := h.subsService.CreateSubscription(c.Request.Context(), email, form.Repo, false); err != nil {
 		status, message := subscribeErrorMessage(err)
 		if status == http.StatusInternalServerError {
 			httpserver.RecordError(c, "create subscription", err)

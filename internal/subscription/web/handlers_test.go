@@ -34,7 +34,7 @@ type fakeSubsService struct {
 	deactivateToken string
 }
 
-func (f *fakeSubsService) CreateSubscription(_ context.Context, email identity.Email, repo string) error {
+func (f *fakeSubsService) CreateSubscription(_ context.Context, email identity.Email, repo string, _ bool) error {
 	f.createEmail = email.String()
 	f.createRepo = repo
 	return f.createErr

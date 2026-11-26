@@ -123,8 +123,8 @@ func (h *apiHandler) handleResendVerification(c *gin.Context) {
 	}
 
 	err = h.authService.ResendVerification(c.Request.Context(), email)
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 	default:
 		h.respondInternalError(c, "resend verification", err)
 		return

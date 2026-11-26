@@ -40,6 +40,23 @@ func testAuthRouter(authenticator Authenticator) *gin.Engine {
 	return router
 }
 
+func testOptionalAuthRouter(authenticator Authenticator) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+
+	router := gin.New()
+	router.Use(OptionalBearerAuth(authenticator))
+	router.GET("/me", func(c *gin.Context) {
+		authenticated, ok := SessionFromContext(c)
+		if !ok {
+			c.JSON(http.StatusOK, gin.H{"anonymous": true})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"email": authenticated.User.Email})
+	})
+
+	return router
+}
+
 func TestParseBearerToken(t *testing.T) {
 	tests := []struct {
 		header string
@@ -79,6 +96,61 @@ func TestBearerAuthAllowsAuthenticatedSession(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "access-token", authenticator.token)
 	require.JSONEq(t, `{"email":"alice@example.com"}`, w.Body.String())
+}
+
+func TestOptionalBearerAuth(t *testing.T) {
+	authenticated := AuthenticatedSession{
+		Session: dbGen.Session{ID: 42, UserEmail: "alice@example.com"},
+		User:    dbGen.User{Email: "alice@example.com"},
+	}
+
+	t.Run("anonymous", func(t *testing.T) {
+		router := testOptionalAuthRouter(&fakeAuthenticator{})
+
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		require.JSONEq(t, `{"anonymous":true}`, w.Body.String())
+	})
+
+	t.Run("authenticated", func(t *testing.T) {
+		authenticator := &fakeAuthenticator{authenticated: authenticated}
+		router := testOptionalAuthRouter(authenticator)
+
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		req.Header.Set("Authorization", "Bearer access-token")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		require.Equal(t, "access-token", authenticator.token)
+		require.JSONEq(t, `{"email":"alice@example.com"}`, w.Body.String())
+	})
+
+	t.Run("invalid token", func(t *testing.T) {
+		router := testOptionalAuthRouter(&fakeAuthenticator{err: ErrInvalidToken})
+
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		req.Header.Set("Authorization", "Bearer expired-token")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusUnauthorized, w.Code)
+		require.Equal(t, "Bearer", w.Header().Get("WWW-Authenticate"))
+	})
+
+	t.Run("malformed header", func(t *testing.T) {
+		router := testOptionalAuthRouter(&fakeAuthenticator{})
+
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		req.Header.Set("Authorization", "Basic credentials")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusUnauthorized, w.Code)
+	})
 }
 
 func TestBearerAuthRejectsMissingInvalidAndInternalErrors(t *testing.T) {

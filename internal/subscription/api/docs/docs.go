@@ -408,7 +408,7 @@ const docTemplate = `{
         },
         "/subscribe": {
             "post": {
-                "description": "Creates a pending subscription for a GitHub repository and queues a confirmation email.",
+                "description": "Anonymous requests create a pending subscription and queue a confirmation email. Requests with a Bearer token subscribe the session user and activate immediately.",
                 "consumes": [
                     "application/json",
                     "application/x-www-form-urlencoded"
@@ -422,7 +422,7 @@ const docTemplate = `{
                 "summary": "Create a subscription",
                 "parameters": [
                     {
-                        "description": "Email address and GitHub repository to subscribe to",
+                        "description": "Email for anonymous requests and GitHub repository; authenticated requests may omit email",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -433,13 +433,25 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Confirmation email queued",
+                        "description": "Confirmation email queued or subscription activated",
                         "schema": {
                             "$ref": "#/definitions/api.messageResponse"
                         }
                     },
                     "400": {
                         "description": "Malformed request body or invalid email/repository",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Present but invalid Bearer token",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Supplied email is invalid or does not match the authenticated user",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
                         }
@@ -485,7 +497,12 @@ const docTemplate = `{
         },
         "/subscriptions": {
             "get": {
-                "description": "Returns all active subscriptions for the email address (case-insensitive).",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the authenticated user's active subscriptions.",
                 "produces": [
                     "application/json"
                 ],
@@ -493,15 +510,6 @@ const docTemplate = `{
                     "Subscriptions"
                 ],
                 "summary": "List active subscriptions",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Email address (bare address only, for example alice@example.com)",
-                        "name": "email",
-                        "in": "query",
-                        "required": true
-                    }
-                ],
                 "responses": {
                     "200": {
                         "description": "Active subscriptions; an empty array is returned when none exist",
@@ -512,8 +520,78 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "401": {
+                        "description": "Missing, invalid, expired, or revoked access token",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/subscriptions/unsubscribe": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Deactivates the authenticated user's active subscription to the given repository.",
+                "consumes": [
+                    "application/json",
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Subscriptions"
+                ],
+                "summary": "Unsubscribe from a repository",
+                "parameters": [
+                    {
+                        "description": "GitHub repository",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.unsubscribeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Subscription deactivated",
+                        "schema": {
+                            "$ref": "#/definitions/api.messageResponse"
+                        }
+                    },
                     "400": {
-                        "description": "Missing or invalid email",
+                        "description": "Malformed request or invalid repository",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing, invalid, expired, or revoked access token",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Subscription not found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Subscription is already inactive",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
                         }
@@ -585,12 +663,11 @@ const docTemplate = `{
         "api.createSubscriptionRequest": {
             "type": "object",
             "required": [
-                "email",
                 "repo"
             ],
             "properties": {
                 "email": {
-                    "description": "Email address to subscribe.",
+                    "description": "Email address to subscribe. Required for anonymous requests; when authenticated it must match the session email.",
                     "type": "string",
                     "example": "alice@example.com"
                 },
@@ -708,11 +785,6 @@ const docTemplate = `{
                     "type": "boolean",
                     "example": true
                 },
-                "email": {
-                    "description": "Email address that owns the subscription.",
-                    "type": "string",
-                    "example": "alice@example.com"
-                },
                 "repo": {
                     "description": "GitHub repository in \"owner/name\" format.",
                     "type": "string",
@@ -758,6 +830,19 @@ const docTemplate = `{
                 }
             }
         },
+        "api.unsubscribeRequest": {
+            "type": "object",
+            "required": [
+                "repo"
+            ],
+            "properties": {
+                "repo": {
+                    "description": "GitHub repository in \"owner/name\" format.",
+                    "type": "string",
+                    "example": "golang/go"
+                }
+            }
+        },
         "api.userResponse": {
             "type": "object",
             "properties": {
@@ -796,7 +881,7 @@ var SwaggerInfo = &swag.Spec{
 	BasePath:         "/api",
 	Schemes:          []string{"http", "https"},
 	Title:            "Subscription API",
-	Description:      "API for managing accounts and subscribing email addresses to GitHub repository releases.",
+	Description:      "API for managing accounts and subscribing to GitHub repository releases.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

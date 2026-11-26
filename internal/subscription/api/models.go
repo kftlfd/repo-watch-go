@@ -74,16 +74,23 @@ type tokenResponse struct {
 
 // createSubscriptionRequest is the payload accepted by POST /api/subscribe.
 // It can be sent as JSON or as an application/x-www-form-urlencoded form.
+// Email is required for anonymous requests and must match the session user when
+// supplied to an authenticated request.
 type createSubscriptionRequest struct {
-	// Email address to subscribe.
-	Email string `json:"email" form:"email" binding:"required,email" example:"alice@example.com"`
+	// Email address to subscribe. Required for anonymous requests; when authenticated it must match the session email.
+	Email string `json:"email" form:"email" example:"alice@example.com"`
+	// GitHub repository in "owner/name" format.
+	Repo string `json:"repo" form:"repo" binding:"required" example:"golang/go"`
+}
+
+// unsubscribeRequest is the payload accepted by
+// POST /api/subscriptions/unsubscribe.
+type unsubscribeRequest struct {
 	// GitHub repository in "owner/name" format.
 	Repo string `json:"repo" form:"repo" binding:"required" example:"golang/go"`
 }
 
 type subscriptionResponse struct {
-	// Email address that owns the subscription.
-	Email string `json:"email" example:"alice@example.com"`
 	// GitHub repository in "owner/name" format.
 	Repo string `json:"repo" example:"golang/go"`
 	// Whether the subscription is active. The list endpoint only returns active subscriptions, so this is always true.

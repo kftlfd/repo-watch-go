@@ -50,7 +50,9 @@ func NewService(d Deps) *service {
 	}
 }
 
-func (s *service) CreateSubscription(ctx context.Context, email identity.Email, repo string) error {
+// CreateSubscription creates a subscription for repo. Anonymous callers get a
+// confirmation email; verified callers are activated immediately.
+func (s *service) CreateSubscription(ctx context.Context, email identity.Email, repo string, verified bool) error {
 	repoInfo, err := verifyRepoInfo(repo)
 	if err != nil {
 		return ErrInvalidInput
@@ -110,8 +112,30 @@ func (s *service) CreateSubscription(ctx context.Context, email identity.Email, 
 	if err != nil {
 		return err
 	}
+
 	if dbSub.Active {
-		return ErrSubscriptionConflict
+		if verified {
+			return ErrSubscriptionConflict
+		}
+		return nil
+	}
+
+	if verified {
+		if err = s.activateSubscription(ctx, qtx, dbSub); err != nil {
+			if errors.Is(err, ErrSubscriptionAlreadyActive) {
+				if commitErr := tx.Commit(); commitErr != nil {
+					return commitErr
+				}
+				return ErrSubscriptionConflict
+			}
+			return err
+		}
+
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+
+		return nil
 	}
 
 	tokenVal, err := newToken()
@@ -174,15 +198,116 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
+	if err = s.activateSubscription(ctx, qtx, sub); err != nil {
+		if errors.Is(err, ErrSubscriptionAlreadyActive) {
+			if commitErr := tx.Commit(); commitErr != nil {
+				return commitErr
+			}
+		}
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *service) DeactivateSubscription(ctx context.Context, token string) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	qtx := s.q.WithTx(tx)
+
+	t, err := qtx.FindSubscriptionTokenForUpdate(ctx, dbGen.FindSubscriptionTokenForUpdateParams{
+		TokenType: TokenTypeUnsub,
+		TokenHash: hashToken(token),
+	})
+	if err != nil {
+		return err
+	}
+
+	sub, err := qtx.GetSubscriptionByID(ctx, t.SubscriptionID)
+	if err != nil {
+		return err
+	}
+
+	if err = s.deactivateSubscription(ctx, qtx, sub); err != nil {
+		if errors.Is(err, ErrSubscriptionAlreadyInactive) {
+			if commitErr := tx.Commit(); commitErr != nil {
+				return commitErr
+			}
+		}
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// DeactivateSubscriptionByRepo deactivates the subscription owned by email for
+// repo.
+func (s *service) DeactivateSubscriptionByRepo(ctx context.Context, email identity.Email, repo string) error {
+	repoInfo, err := verifyRepoInfo(repo)
+	if err != nil {
+		return ErrInvalidInput
+	}
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	qtx := s.q.WithTx(tx)
+
+	sub, err := qtx.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+		Email:        email.String(),
+		RepositoryID: repoInfo.repoId,
+	})
+	if err != nil {
+		return err
+	}
+
+	if err = s.deactivateSubscription(ctx, qtx, sub); err != nil {
+		if errors.Is(err, ErrSubscriptionAlreadyInactive) {
+			if commitErr := tx.Commit(); commitErr != nil {
+				return commitErr
+			}
+		}
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *service) GetSubscriptionsList(ctx context.Context, email identity.Email) ([]string, error) {
+	subs, err := s.q.ListSubscriptionsByEmail(ctx, email.String())
+	if err != nil {
+		return nil, err
+	}
+
+	return subs, nil
+}
+
+func (s *service) activateSubscription(ctx context.Context, qtx *dbGen.Queries, sub dbGen.Subscription) error {
 	updSub, err := qtx.ActivateSubscription(ctx, sub.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err = qtx.DeleteSubscriptionTokensBySubIDAndType(ctx, dbGen.DeleteSubscriptionTokensBySubIDAndTypeParams{
 			SubscriptionID: sub.ID,
 			TokenType:      TokenTypeConfirm,
 		}); err != nil {
-			return err
-		}
-		if err = tx.Commit(); err != nil {
 			return err
 		}
 		return ErrSubscriptionAlreadyActive
@@ -247,52 +372,20 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	if err = outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
+	return outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
 		Recipient: updSub.Email,
 		Type:      emails.EmailSubscribed,
 		Data:      emailData,
-	}); err != nil {
-		return err
-	}
-
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-
-	return nil
+	})
 }
 
-func (s *service) DeactivateSubscription(ctx context.Context, token string) error {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	qtx := s.q.WithTx(tx)
-
-	t, err := qtx.FindSubscriptionTokenForUpdate(ctx, dbGen.FindSubscriptionTokenForUpdateParams{
-		TokenType: TokenTypeUnsub,
-		TokenHash: hashToken(token),
-	})
-	if err != nil {
-		return err
-	}
-
-	sub, err := qtx.GetSubscriptionByID(ctx, t.SubscriptionID)
-	if err != nil {
-		return err
-	}
-
+func (s *service) deactivateSubscription(ctx context.Context, qtx *dbGen.Queries, sub dbGen.Subscription) error {
 	updSub, err := qtx.DeactivateSubscription(ctx, sub.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err = qtx.DeleteSubscriptionTokensBySubIDAndType(ctx, dbGen.DeleteSubscriptionTokensBySubIDAndTypeParams{
 			SubscriptionID: sub.ID,
 			TokenType:      TokenTypeUnsub,
 		}); err != nil {
-			return err
-		}
-		if err = tx.Commit(); err != nil {
 			return err
 		}
 		return ErrSubscriptionAlreadyInactive
@@ -342,26 +435,9 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	if err = outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
+	return outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
 		Recipient: updSub.Email,
 		Type:      emails.EmailUnsubscribed,
 		Data:      emailData,
-	}); err != nil {
-		return err
-	}
-
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (s *service) GetSubscriptionsList(ctx context.Context, email identity.Email) ([]string, error) {
-	subs, err := s.q.ListSubscriptionsByEmail(ctx, email.String())
-	if err != nil {
-		return nil, err
-	}
-
-	return subs, nil
+	})
 }
