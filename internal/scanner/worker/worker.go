@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +16,7 @@ import (
 	"repo-watch/internal/observability"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/scanner/db/dbGen"
+	"repo-watch/internal/scanner/outbox"
 )
 
 type GithubClient interface {
@@ -344,24 +344,11 @@ func (w *scannerWorker) updateRepo(ctx context.Context, repo dbGen.Repository, l
 		}
 
 		if inserted > 0 {
-			payload, err := json.Marshal(
-				events.EventReleaseDetectedPayload{
-					RepositoryID: repo.ID,
-					Owner:        repo.Owner,
-					Name:         repo.Name,
-					Tag:          latestTag,
-				})
-			if err != nil {
-				return fmt.Errorf("marshal outbox payload json: %w", err)
-			}
-
-			traceParent, _ := observability.GetTraceParent(ctx)
-			_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-				EventType:     events.EventReleaseDetected,
-				EventVersion:  events.VersionReleaseDetected,
-				CorrelationID: observability.GetCorrelationID(ctx),
-				TraceParent:   traceParent,
-				Payload:       payload,
+			err = outbox.NewReleaseDetected(ctx, qtx, events.EventReleaseDetectedPayload{
+				RepositoryID: repo.ID,
+				Owner:        repo.Owner,
+				Name:         repo.Name,
+				Tag:          latestTag,
 			})
 			if err != nil {
 				return fmt.Errorf("insert into outbox: %w", err)
@@ -402,21 +389,8 @@ func (w *scannerWorker) removeRepo(ctx context.Context, repo dbGen.Repository) e
 		return nil
 	}
 
-	payload, err := json.Marshal(
-		events.EventRepositoryRemovedPayload{
-			RepositoryID: repo.ID,
-		})
-	if err != nil {
-		return fmt.Errorf("marshal outbox payload json: %w", err)
-	}
-
-	traceParent, _ := observability.GetTraceParent(ctx)
-	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-		EventType:     events.EventRepositoryRemoved,
-		EventVersion:  events.VersionRepositoryRemoved,
-		CorrelationID: observability.GetCorrelationID(ctx),
-		TraceParent:   traceParent,
-		Payload:       payload,
+	err = outbox.NewRepositoryRemoved(ctx, qtx, events.EventRepositoryRemovedPayload{
+		RepositoryID: repo.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("insert into outbox: %w", err)

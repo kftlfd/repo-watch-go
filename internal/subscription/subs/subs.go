@@ -11,8 +11,8 @@ import (
 	"repo-watch/internal/emails"
 	"repo-watch/internal/events"
 	"repo-watch/internal/github"
-	"repo-watch/internal/observability"
 	"repo-watch/internal/subscription/db/dbGen"
+	"repo-watch/internal/subscription/outbox"
 )
 
 var (
@@ -140,14 +140,11 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return err
 	}
 
-	if err = saveToOutbox(ctx, qtx,
-		events.EventEmailQueued,
-		events.EventEmailQueuedPayload{
-			Recipient: emailInfo.email,
-			Type:      emails.EmailConfirmSubscription,
-			Data:      emailData,
-		},
-	); err != nil {
+	if err = outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
+		Recipient: emailInfo.email,
+		Type:      emails.EmailConfirmSubscription,
+		Data:      emailData,
+	}); err != nil {
 		return err
 	}
 
@@ -221,34 +218,28 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	if err = saveToOutbox(ctx, qtx,
-		events.EventSubscriptionChanged,
-		events.EventSubscriptionChangedPayload{
-			SubscriptionID: updSub.ID,
-			RepositoryID:   updRepo.ID,
-			Email:          updSub.Email,
-			Active:         updSub.Active,
-			Version:        updSub.ActiveVersion,
-			UnsubToken:     unsubTokenVal,
-			UpdatedAt:      updSub.UpdatedAt,
-		},
-	); err != nil {
+	if err = outbox.NewSubscriptionChanged(ctx, qtx, events.EventSubscriptionChangedPayload{
+		SubscriptionID: updSub.ID,
+		RepositoryID:   updRepo.ID,
+		Email:          updSub.Email,
+		Active:         updSub.Active,
+		Version:        updSub.ActiveVersion,
+		UnsubToken:     unsubTokenVal,
+		UpdatedAt:      updSub.UpdatedAt,
+	}); err != nil {
 		return err
 	}
 
 	if updRepo.ActiveSubscriptionsCount == 1 {
-		if err = saveToOutbox(ctx, qtx,
-			events.EventRepositoryChanged,
-			events.EventRepositoryChangedPayload{
-				RepositoryID:  updRepo.ID,
-				Owner:         updRepo.Owner,
-				Name:          updRepo.Name,
-				LatestSeenTag: updRepo.InitTag,
-				Active:        updRepo.ActiveSubscriptionsCount > 0,
-				ActiveVersion: updRepo.ActiveVersion,
-				UpdatedAt:     updRepo.UpdatedAt,
-			},
-		); err != nil {
+		if err = outbox.NewRepositoryChanged(ctx, qtx, events.EventRepositoryChangedPayload{
+			RepositoryID:  updRepo.ID,
+			Owner:         updRepo.Owner,
+			Name:          updRepo.Name,
+			LatestSeenTag: updRepo.InitTag,
+			Active:        updRepo.ActiveSubscriptionsCount > 0,
+			ActiveVersion: updRepo.ActiveVersion,
+			UpdatedAt:     updRepo.UpdatedAt,
+		}); err != nil {
 			return err
 		}
 	}
@@ -260,14 +251,11 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 		return err
 	}
 
-	if err = saveToOutbox(ctx, qtx,
-		events.EventEmailQueued,
-		events.EventEmailQueuedPayload{
-			Recipient: updSub.Email,
-			Type:      emails.EmailSubscribed,
-			Data:      emailData,
-		},
-	); err != nil {
+	if err = outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
+		Recipient: updSub.Email,
+		Type:      emails.EmailSubscribed,
+		Data:      emailData,
+	}); err != nil {
 		return err
 	}
 
@@ -326,33 +314,27 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	if err = saveToOutbox(ctx, qtx,
-		events.EventSubscriptionChanged,
-		events.EventSubscriptionChangedPayload{
-			SubscriptionID: updSub.ID,
-			RepositoryID:   updRepo.ID,
-			Email:          updSub.Email,
-			Active:         updSub.Active,
-			Version:        updSub.ActiveVersion,
-			UpdatedAt:      updSub.UpdatedAt,
-		},
-	); err != nil {
+	if err = outbox.NewSubscriptionChanged(ctx, qtx, events.EventSubscriptionChangedPayload{
+		SubscriptionID: updSub.ID,
+		RepositoryID:   updRepo.ID,
+		Email:          updSub.Email,
+		Active:         updSub.Active,
+		Version:        updSub.ActiveVersion,
+		UpdatedAt:      updSub.UpdatedAt,
+	}); err != nil {
 		return err
 	}
 
 	if updRepo.ActiveSubscriptionsCount == 0 {
-		if err = saveToOutbox(ctx, qtx,
-			events.EventRepositoryChanged,
-			events.EventRepositoryChangedPayload{
-				RepositoryID:  updRepo.ID,
-				Owner:         updRepo.Owner,
-				Name:          updRepo.Name,
-				LatestSeenTag: updRepo.InitTag,
-				Active:        updRepo.ActiveSubscriptionsCount > 0,
-				ActiveVersion: updRepo.ActiveVersion,
-				UpdatedAt:     updRepo.UpdatedAt,
-			},
-		); err != nil {
+		if err = outbox.NewRepositoryChanged(ctx, qtx, events.EventRepositoryChangedPayload{
+			RepositoryID:  updRepo.ID,
+			Owner:         updRepo.Owner,
+			Name:          updRepo.Name,
+			LatestSeenTag: updRepo.InitTag,
+			Active:        updRepo.ActiveSubscriptionsCount > 0,
+			ActiveVersion: updRepo.ActiveVersion,
+			UpdatedAt:     updRepo.UpdatedAt,
+		}); err != nil {
 			return err
 		}
 	}
@@ -364,14 +346,11 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	if err = saveToOutbox(ctx, qtx,
-		events.EventEmailQueued,
-		events.EventEmailQueuedPayload{
-			Recipient: updSub.Email,
-			Type:      emails.EmailUnsubscribed,
-			Data:      emailData,
-		},
-	); err != nil {
+	if err = outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
+		Recipient: updSub.Email,
+		Type:      emails.EmailUnsubscribed,
+		Data:      emailData,
+	}); err != nil {
 		return err
 	}
 
@@ -394,28 +373,4 @@ func (s *service) GetSubscriptionsList(ctx context.Context, email string) ([]str
 	}
 
 	return subs, nil
-}
-
-func saveToOutbox(ctx context.Context, qtx *dbGen.Queries, eventType string, eventPayload any) error {
-	eventVersion, ok := events.CurrentVersion(eventType)
-	if !ok {
-		return fmt.Errorf("unknown event type: %q", eventType)
-	}
-
-	jsonData, err := json.Marshal(eventPayload)
-	if err != nil {
-		return fmt.Errorf("json marshal event: %w", err)
-	}
-
-	traceParent, _ := observability.GetTraceParent(ctx)
-
-	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-		EventType:     eventType,
-		EventVersion:  eventVersion,
-		CorrelationID: observability.GetCorrelationID(ctx),
-		TraceParent:   traceParent,
-		Payload:       jsonData,
-	})
-
-	return err
 }
