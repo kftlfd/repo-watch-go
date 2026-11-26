@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"repo-watch/internal/httpserver"
+	"repo-watch/internal/subscription/auth"
+	"repo-watch/internal/subscription/db/dbGen"
 	"repo-watch/internal/subscription/identity"
 	"repo-watch/internal/subscription/subs"
 )
@@ -54,7 +56,78 @@ type fakeMetrics struct{}
 
 func (fakeMetrics) HTTPRequest(string, string, int, time.Duration) {}
 
+type fakeAuthService struct {
+	loginEmail    string
+	loginPassword string
+	loginPair     auth.TokenPair
+	loginErr      error
+
+	refreshToken string
+	refreshPair  auth.TokenPair
+	refreshErr   error
+
+	authenticateToken string
+	authenticated     auth.AuthenticatedSession
+	authenticateErr   error
+	authenticateFn    func(string) (auth.AuthenticatedSession, error)
+
+	revokeSessionID int64
+	revokeErr       error
+}
+
+func (f *fakeAuthService) Login(_ context.Context, email identity.Email, password string) (auth.TokenPair, error) {
+	f.loginEmail = email.String()
+	f.loginPassword = password
+	return f.loginPair, f.loginErr
+}
+
+func (f *fakeAuthService) RefreshSession(_ context.Context, refreshToken string) (auth.TokenPair, error) {
+	f.refreshToken = refreshToken
+	return f.refreshPair, f.refreshErr
+}
+
+func (f *fakeAuthService) Authenticate(_ context.Context, accessToken string) (auth.AuthenticatedSession, error) {
+	f.authenticateToken = accessToken
+	if f.authenticateFn != nil {
+		return f.authenticateFn(accessToken)
+	}
+	return f.authenticated, f.authenticateErr
+}
+
+func (f *fakeAuthService) RevokeSession(_ context.Context, sessionID int64) error {
+	f.revokeSessionID = sessionID
+	return f.revokeErr
+}
+
+func webSession(email string) auth.AuthenticatedSession {
+	return auth.AuthenticatedSession{
+		Session: dbGen.Session{ID: 42, UserEmail: email},
+		User:    dbGen.User{Email: email},
+	}
+}
+
+func webTokenPair() auth.TokenPair {
+	return auth.TokenPair{
+		UserEmail:        "alice@example.com",
+		AccessToken:      "access-token",
+		RefreshToken:     "refresh-token",
+		AccessExpiresIn:  10 * time.Minute,
+		RefreshExpiresIn: 30 * 24 * time.Hour,
+	}
+}
+
 func newTestRouter(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer) {
+	t.Helper()
+
+	h, logs, _, _ := newTestRouterWithAuth(t, svc, &fakeAuthService{})
+	return h, logs
+}
+
+func newTestRouterWithAuth(
+	t *testing.T,
+	svc subsService,
+	authSvc authService,
+) (http.Handler, *bytes.Buffer, *auth.CookieManager, *httpserver.CSRF) {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
@@ -62,19 +135,46 @@ func newTestRouter(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer) 
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
+	cookies := auth.NewCookieManager(auth.CookieConfig{BaseURL: "http://localhost:3000"})
+	csrf, err := httpserver.NewCSRF(httpserver.CSRFConfig{
+		Secret:  []byte(strings.Repeat("s", 32)),
+		BaseURL: "http://localhost:3000",
+	})
+	require.NoError(t, err)
+
 	router := gin.New()
 	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}, false))
 	router.Use(httpserver.Recovery())
 
 	RegisterRoutes(router.Group("/"), Deps{
 		SubsService: svc,
+		AuthService: authSvc,
+		Cookies:     cookies,
+		CSRF:        csrf,
 	})
 	router.NoRoute(NotFound)
 
-	return router, logs
+	return router, logs, cookies, csrf
 }
 
 func doRequest(t *testing.T, h http.Handler, method, target, contentType, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return doRequestWithOptions(t, h, method, target, contentType, body, true)
+}
+
+func doRequestWithoutCSRF(t *testing.T, h http.Handler, method, target, contentType, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return doRequestWithOptions(t, h, method, target, contentType, body, false)
+}
+
+func doRequestWithOptions(
+	t *testing.T,
+	h http.Handler,
+	method, target, contentType, body string,
+	withCSRF bool,
+) *httptest.ResponseRecorder {
 	t.Helper()
 
 	var reader io.Reader
@@ -87,10 +187,42 @@ func doRequest(t *testing.T, h http.Handler, method, target, contentType, body s
 		req.Header.Set("Content-Type", contentType)
 	}
 
+	if withCSRF && !isSafeMethod(method) {
+		cookie, token := csrfToken(t, h)
+		req.AddCookie(cookie)
+		req.Header.Set(httpserver.CSRFHeader, token)
+	}
+
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
 	return w
+}
+
+func csrfToken(t *testing.T, h http.Handler) (*http.Cookie, string) {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	for _, cookie := range w.Result().Cookies() {
+		if strings.Contains(cookie.Name, "csrf") {
+			return cookie, cookie.Value
+		}
+	}
+
+	t.Fatal("csrf cookie not found")
+	return nil, ""
+}
+
+func isSafeMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return true
+	default:
+		return false
+	}
 }
 
 func TestSubscribePage(t *testing.T) {
@@ -264,6 +396,7 @@ func TestConfirmPage(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Contains(t, w.Body.String(), "Confirm subscription")
+	require.Contains(t, w.Body.String(), `name="csrf_token"`)
 	require.Empty(t, svc.confirmToken)
 }
 
@@ -275,6 +408,7 @@ func TestUnsubscribePage(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Contains(t, w.Body.String(), "Unsubscribe")
+	require.Contains(t, w.Body.String(), `name="csrf_token"`)
 	require.Empty(t, svc.deactivateToken)
 }
 
@@ -374,4 +508,177 @@ func TestTokenErrors(t *testing.T) {
 
 		require.Contains(t, logs.String(), "secret token lookup failure")
 	})
+}
+
+func TestCSRFRequiredForUnsafeMethods(t *testing.T) {
+	svc := &fakeSubsService{}
+	h, _ := newTestRouter(t, svc)
+
+	form := url.Values{
+		"email": {"alice@example.com"},
+		"repo":  {"golang/go"},
+	}.Encode()
+
+	w := doRequestWithoutCSRF(t, h, http.MethodPost, "/subscribe",
+		"application/x-www-form-urlencoded", form)
+
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Empty(t, svc.createEmail)
+}
+
+func TestSubscribePageIncludesCSRFToken(t *testing.T) {
+	h, _ := newTestRouter(t, &fakeSubsService{})
+
+	w := doRequest(t, h, http.MethodGet, "/", "", "")
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `name="csrf_token"`)
+	require.Contains(t, w.Body.String(), `value="`)
+}
+
+func TestLoginSetsCookiesAndRotatesCSRF(t *testing.T) {
+	authSvc := &fakeAuthService{loginPair: webTokenPair()}
+	h, _, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+	oldCookie, oldToken := csrfToken(t, h)
+	form := url.Values{
+		"email":    {"alice@example.com"},
+		"password": {"correct horse battery staple"},
+	}.Encode()
+
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(oldCookie)
+	req.Header.Set(httpserver.CSRFHeader, oldToken)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	require.Equal(t, "/", w.Header().Get("Location"))
+	require.Equal(t, "alice@example.com", authSvc.loginEmail)
+	require.Equal(t, "correct horse battery staple", authSvc.loginPassword)
+
+	access := responseCookie(t, w, "rw_access")
+	require.Equal(t, "access-token", access.Value)
+	require.True(t, access.HttpOnly)
+	require.False(t, access.Secure)
+	require.Equal(t, "/", access.Path)
+	require.Equal(t, http.SameSiteLaxMode, access.SameSite)
+	require.Equal(t, 600, access.MaxAge)
+
+	refresh := responseCookie(t, w, "rw_refresh")
+	require.Equal(t, "refresh-token", refresh.Value)
+	require.True(t, refresh.HttpOnly)
+	require.Equal(t, 2592000, refresh.MaxAge)
+
+	csrf := responseCookie(t, w, "rw_csrf")
+	require.NotEqual(t, oldToken, csrf.Value)
+	require.False(t, csrf.HttpOnly)
+}
+
+func TestLogoutRevokesSessionClearsCookiesAndRotatesCSRF(t *testing.T) {
+	authSvc := &fakeAuthService{authenticated: webSession("alice@example.com")}
+	h, _, _, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+	oldCookie, oldToken := csrfToken(t, h)
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req.AddCookie(oldCookie)
+	req.AddCookie(&http.Cookie{Name: "rw_access", Value: "access-token"})
+	req.Header.Set(httpserver.CSRFHeader, oldToken)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	require.Equal(t, "/", w.Header().Get("Location"))
+	require.Equal(t, int64(42), authSvc.revokeSessionID)
+
+	require.Less(t, responseCookie(t, w, "rw_access").MaxAge, 0)
+	require.Less(t, responseCookie(t, w, "rw_refresh").MaxAge, 0)
+	require.NotEqual(t, oldToken, responseCookie(t, w, "rw_csrf").Value)
+}
+
+func TestCookieAuthRefreshesExpiredAccessToken(t *testing.T) {
+	authSvc := &fakeAuthService{
+		refreshPair: auth.TokenPair{
+			UserEmail:        "alice@example.com",
+			AccessToken:      "new-access-token",
+			RefreshToken:     "new-refresh-token",
+			AccessExpiresIn:  10 * time.Minute,
+			RefreshExpiresIn: 30 * 24 * time.Hour,
+		},
+		authenticateFn: func(token string) (auth.AuthenticatedSession, error) {
+			if token == "new-access-token" {
+				return webSession("alice@example.com"), nil
+			}
+			return auth.AuthenticatedSession{}, auth.ErrInvalidToken
+		},
+	}
+	cookies := auth.NewCookieManager(auth.CookieConfig{BaseURL: "http://localhost:3000"})
+
+	router := gin.New()
+	router.Use(auth.CookieAuth(authSvc, cookies, auth.CookieAuthConfig{}))
+	router.GET("/private", func(c *gin.Context) {
+		session, ok := auth.SessionFromContext(c)
+		require.True(t, ok)
+		c.String(http.StatusOK, session.User.Email)
+	})
+
+	accessName := cookies.AccessName()
+	refreshName := cookies.RefreshName()
+	req := httptest.NewRequest(http.MethodGet, "/private", nil)
+	req.AddCookie(&http.Cookie{Name: accessName, Value: "old-access-token"})
+	req.AddCookie(&http.Cookie{Name: refreshName, Value: "old-refresh-token"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "alice@example.com", w.Body.String())
+	require.Equal(t, "old-refresh-token", authSvc.refreshToken)
+	require.Equal(t, "new-access-token", responseCookie(t, w, accessName).Value)
+	require.Equal(t, "new-refresh-token", responseCookie(t, w, refreshName).Value)
+}
+
+func TestCookieAuthRedirectsWhenRefreshFails(t *testing.T) {
+	authSvc := &fakeAuthService{
+		authenticateErr: auth.ErrInvalidToken,
+		refreshErr:      auth.ErrInvalidToken,
+	}
+	cookies := auth.NewCookieManager(auth.CookieConfig{BaseURL: "http://localhost:3000"})
+
+	router := gin.New()
+	router.Use(auth.CookieAuth(authSvc, cookies, auth.CookieAuthConfig{Required: true}))
+	router.GET("/private", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	accessName := cookies.AccessName()
+	refreshName := cookies.RefreshName()
+	req := httptest.NewRequest(http.MethodGet, "/private", nil)
+	req.AddCookie(&http.Cookie{Name: accessName, Value: "expired-access-token"})
+	req.AddCookie(&http.Cookie{Name: refreshName, Value: "invalid-refresh-token"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	require.Equal(t, "/login?next=%2Fprivate", w.Header().Get("Location"))
+	require.Less(t, responseCookie(t, w, accessName).MaxAge, 0)
+	require.Less(t, responseCookie(t, w, refreshName).MaxAge, 0)
+}
+
+func responseCookie(t *testing.T, w *httptest.ResponseRecorder, name string) *http.Cookie {
+	t.Helper()
+
+	var found *http.Cookie
+	for _, cookie := range w.Result().Cookies() {
+		if cookie.Name == name {
+			found = cookie
+		}
+	}
+	if found == nil {
+		t.Fatalf("cookie %q not found", name)
+	}
+
+	return found
 }

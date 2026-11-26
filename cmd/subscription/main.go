@@ -153,6 +153,12 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		return fmt.Errorf("create auth service: %w", err)
 	}
 
+	cookies := auth.NewCookieManager(auth.CookieConfig{BaseURL: cfg.AppBaseURL})
+	csrf, err := httpserver.NewCSRF(httpserver.CSRFConfig{BaseURL: cfg.AppBaseURL, Secret: cfg.JWTSecret})
+	if err != nil {
+		return fmt.Errorf("create csrf protection: %w", err)
+	}
+
 	outboxDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherDeps{
 		Logger:    logger.With("module", "subscription_outbox"),
 		Store:     outbox.NewSubscriptionOutbox(queries),
@@ -207,6 +213,9 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	})
 	web.RegisterRoutes(router.Group("/"), web.Deps{
 		SubsService: subsSvc,
+		AuthService: authSvc,
+		Cookies:     cookies,
+		CSRF:        csrf,
 	})
 
 	router.NoRoute(func(c *gin.Context) {

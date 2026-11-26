@@ -17,6 +17,7 @@ type Config struct {
 	PortAPI     string
 	PortAdmin   string
 	APIHost     string
+	AppBaseURL  string
 	Db          postgres.Config
 	RabbitMQUrl string
 	GhApiUrl    string
@@ -31,10 +32,11 @@ func loadConfig() *Config {
 	return &Config{
 		LogLevel: observability.ParseLevel(os.Getenv("LOG_LEVEL")),
 
-		IsDev:     os.Getenv("ENV") == "dev",
-		PortAPI:   utils.Env("PORT", "3000"),
-		PortAdmin: utils.Env("PORT_ADMIN", "4000"),
-		APIHost:   utils.Env("API_HOST", "localhost:3000"),
+		IsDev:      os.Getenv("ENV") == "dev",
+		PortAPI:    utils.Env("PORT", "3000"),
+		PortAdmin:  utils.Env("PORT_ADMIN", "4000"),
+		APIHost:    utils.Env("API_HOST", "localhost:3000"),
+		AppBaseURL: utils.Env("APP_BASE_URL", "http://localhost:3000"),
 
 		Db: postgres.Config{
 			URL:      os.Getenv("DB_URL"),

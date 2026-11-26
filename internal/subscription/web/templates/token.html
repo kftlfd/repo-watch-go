@@ -2,6 +2,7 @@
       <h1>{{.Title}}</h1>
       <p>{{.Message}}</p>
       <form method="post">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}" />
         <button type="submit">{{.Button}}</button>
       </form>
 {{template "foot" .}}{{end}}

@@ -23,12 +23,13 @@ const (
 )
 
 type pageData struct {
-	Title   string
-	Message string
-	Button  string
-	Error   string
-	Email   string
-	Repo    string
+	Title     string
+	Message   string
+	Button    string
+	Error     string
+	Email     string
+	Repo      string
+	CSRFToken string
 }
 
 type subscribeForm struct {
@@ -165,6 +166,8 @@ func (h *webHandler) renderSubscribeError(c *gin.Context, status int, form subsc
 }
 
 func render(c *gin.Context, status int, name string, data pageData) {
+	data.CSRFToken = httpserver.GetCSRFToken(c)
+
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.Status(status)
 
