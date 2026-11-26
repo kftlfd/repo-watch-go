@@ -67,7 +67,9 @@ CREATE TABLE user_tokens (
     token_type TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (user_email, token_type)
+    UNIQUE (user_email, token_type),
+    CONSTRAINT user_tokens_token_type_check
+        CHECK (token_type IN ('verify'))
 );
 
 CREATE INDEX user_tokens_created_at_idx ON user_tokens (created_at);
@@ -78,7 +80,9 @@ CREATE TABLE subscription_tokens (
     token_type TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (subscription_id, token_type)
+    UNIQUE (subscription_id, token_type),
+    CONSTRAINT subscription_tokens_token_type_check
+        CHECK (token_type IN ('confirm', 'unsub'))
 );
 
 CREATE INDEX subscription_tokens_confirm_created_at_idx ON subscription_tokens (created_at)
