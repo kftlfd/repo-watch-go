@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	tokenRetention              = subs.ConfirmTokenValidity
+	tokenRetention              = subs.SubscriptionTokenConfirmTTL
 	publishedOutboxRetention    = 2 * rabbitmq.DLQMessageTTL
 	failedOutboxRetention       = time.Hour * 24 * 30
 	orphanedUnsubTokenRetention = time.Hour * 24

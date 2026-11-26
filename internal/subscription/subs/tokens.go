@@ -10,7 +10,7 @@ const (
 	TokenTypeConfirm = "confirm"
 	TokenTypeUnsub   = "unsub"
 
-	ConfirmTokenValidity = time.Hour
+	SubscriptionTokenConfirmTTL = time.Hour
 
 	tokenBytes = 16
 )
