@@ -204,7 +204,7 @@ func TestLoginMapsAuthErrors(t *testing.T) {
 	})
 }
 
-func TestRefreshReturnsRotatedPairAndMapsReuse(t *testing.T) {
+func TestRefreshReturnsRotatedPairAndMapsInvalidToken(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		svc := &fakeAuthService{refreshPair: testTokenPair()}
 		h, _ := newTestHandlerWithAuth(t, &fakeSubsService{}, svc)
@@ -216,8 +216,8 @@ func TestRefreshReturnsRotatedPairAndMapsReuse(t *testing.T) {
 		require.Equal(t, "old-refresh", svc.refreshToken)
 	})
 
-	t.Run("reuse", func(t *testing.T) {
-		svc := &fakeAuthService{refreshErr: auth.ErrTokenReused}
+	t.Run("already used", func(t *testing.T) {
+		svc := &fakeAuthService{refreshErr: auth.ErrInvalidToken}
 		h, _ := newTestHandlerWithAuth(t, &fakeSubsService{}, svc)
 
 		w := doRequest(t, h, http.MethodPost, "/api/auth/refresh", "application/json",
@@ -225,7 +225,7 @@ func TestRefreshReturnsRotatedPairAndMapsReuse(t *testing.T) {
 
 		require.Equal(t, http.StatusUnauthorized, w.Code)
 		require.Equal(t, "Bearer", w.Header().Get("WWW-Authenticate"))
-		require.Equal(t, codeTokenReused, decodeErrorCode(t, w))
+		require.Equal(t, codeUnauthorized, decodeErrorCode(t, w))
 	})
 }
 

@@ -167,7 +167,7 @@ const docTemplate = `{
         },
         "/auth/refresh": {
             "post": {
-                "description": "Rotates the refresh token and returns a new access/refresh pair. Reuse of an old refresh token revokes the session.",
+                "description": "Rotates the refresh token and returns a new access/refresh pair. Used refresh tokens are invalid without revoking the session created by a later rotation.",
                 "consumes": [
                     "application/json",
                     "application/x-www-form-urlencoded"
@@ -204,7 +204,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Invalid, expired, or reused refresh token",
+                        "description": "Invalid, expired, or already-used refresh token",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
                         }

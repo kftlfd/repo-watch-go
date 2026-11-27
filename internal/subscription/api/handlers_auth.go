@@ -23,7 +23,6 @@ const (
 
 	codeInvalidCredentials = "invalid_credentials"
 	codeEmailUnverified    = "email_unverified"
-	codeTokenReused        = "token_reused"
 	codeUnauthorized       = "unauthorized"
 )
 
@@ -180,14 +179,14 @@ func (h *apiHandler) handleLogin(c *gin.Context) {
 // handleRefresh rotates a refresh token and returns a new token pair.
 //
 // @Summary      Refresh a session
-// @Description  Rotates the refresh token and returns a new access/refresh pair. Reuse of an old refresh token revokes the session.
+// @Description  Rotates the refresh token and returns a new access/refresh pair. Used refresh tokens are invalid without revoking the session created by a later rotation.
 // @Tags         Auth
 // @Accept       json,x-www-form-urlencoded
 // @Produce      json
 // @Param        request       body    refreshRequest  true   "Refresh token"
 // @Success      200  {object}  tokenResponse  "Rotated token pair"
 // @Failure      400  {object}  errorResponse  "Malformed request"
-// @Failure      401  {object}  errorResponse  "Invalid, expired, or reused refresh token"
+// @Failure      401  {object}  errorResponse  "Invalid, expired, or already-used refresh token"
 // @Failure      500  {object}  errorResponse  "Internal server error"
 // @Router       /auth/refresh [post]
 func (h *apiHandler) handleRefresh(c *gin.Context) {
@@ -200,9 +199,6 @@ func (h *apiHandler) handleRefresh(c *gin.Context) {
 	pair, err := h.authService.RefreshSession(c.Request.Context(), req.RefreshToken)
 	switch {
 	case err == nil:
-	case errors.Is(err, auth.ErrTokenReused):
-		respondUnauthorized(c, errUnauthorized, codeTokenReused)
-		return
 	case errors.Is(err, auth.ErrInvalidToken):
 		respondUnauthorized(c, errUnauthorized, codeUnauthorized)
 		return

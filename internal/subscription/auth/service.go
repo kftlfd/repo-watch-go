@@ -38,7 +38,6 @@ const (
 )
 
 var (
-	ErrTokenReused           = errors.New("refresh token reused")
 	ErrInvalidCredentials    = errors.New("invalid credentials")
 	ErrEmailUnverified       = errors.New("email not verified")
 	ErrInvalidPasswordLength = errors.New("invalid password length")
@@ -485,9 +484,8 @@ func (s *Service) queueVerificationEmail(ctx context.Context, qtx *dbGen.Queries
 	return nil
 }
 
-// RefreshSession rotates a refresh token and returns a new pair. Reusing an
-// already-used refresh token revokes the whole session and returns
-// ErrTokenReused.
+// RefreshSession rotates a refresh token and returns a new pair. Used refresh
+// tokens are invalid and do not revoke the session created by a later rotation.
 func (s *Service) RefreshSession(ctx context.Context, rawRefreshToken string) (TokenPair, error) {
 	if !securetoken.Validate(rawRefreshToken, refreshTokenBytes) {
 		return TokenPair{}, ErrInvalidToken
@@ -512,13 +510,7 @@ func (s *Service) RefreshSession(ctx context.Context, rawRefreshToken string) (T
 	now := s.now()
 
 	if refreshToken.UsedAt.Valid {
-		if err := s.revokeSession(ctx, qtx, refreshToken.SessionID); err != nil {
-			return TokenPair{}, err
-		}
-		if err = tx.Commit(); err != nil {
-			return TokenPair{}, fmt.Errorf("commit reused refresh tx: %w", err)
-		}
-		return TokenPair{}, ErrTokenReused
+		return TokenPair{}, ErrInvalidToken
 	}
 
 	if refreshToken.RevokedAt.Valid || !now.Before(refreshToken.ExpiresAt) {
@@ -530,7 +522,7 @@ func (s *Service) RefreshSession(ctx context.Context, rawRefreshToken string) (T
 	}
 
 	if _, err = qtx.MarkRefreshTokenUsed(ctx, refreshToken.ID); errors.Is(err, sql.ErrNoRows) {
-		return TokenPair{}, ErrTokenReused
+		return TokenPair{}, ErrInvalidToken
 	} else if err != nil {
 		return TokenPair{}, err
 	}

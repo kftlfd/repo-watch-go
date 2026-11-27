@@ -213,7 +213,7 @@ func TestCreateSessionStoresOnlyHashesAndAuthenticates(t *testing.T) {
 	require.Equal(t, email.String(), authenticated.Session.UserEmail)
 }
 
-func TestRefreshSessionRotatesAndReuseRevokesSession(t *testing.T) {
+func TestRefreshSessionRotatesAndRejectsUsedTokenWithoutRevocation(t *testing.T) {
 	svc, queries := newAuthService(t)
 	ctx := context.Background()
 	email := mustEmail(t, "alice@example.com")
@@ -237,10 +237,11 @@ func TestRefreshSessionRotatesAndReuseRevokesSession(t *testing.T) {
 	require.False(t, fresh.UsedAt.Valid)
 
 	_, err = svc.RefreshSession(ctx, first.RefreshToken)
-	require.ErrorIs(t, err, auth.ErrTokenReused)
-
-	_, err = svc.Authenticate(ctx, second.AccessToken)
 	require.ErrorIs(t, err, auth.ErrInvalidToken)
+
+	authenticated, err := svc.Authenticate(ctx, second.AccessToken)
+	require.NoError(t, err)
+	require.Equal(t, email.String(), authenticated.User.Email)
 }
 
 func TestRevokeSessionInvalidatesAccessToken(t *testing.T) {
@@ -275,6 +276,7 @@ func TestConcurrentRefreshSucceedsOnce(t *testing.T) {
 	require.NoError(t, err)
 
 	start := make(chan struct{})
+	pairs := make([]auth.TokenPair, 2)
 	errs := make([]error, 2)
 	var wg sync.WaitGroup
 	for i := range errs {
@@ -282,24 +284,26 @@ func TestConcurrentRefreshSucceedsOnce(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			_, errs[i] = svc.RefreshSession(ctx, pair.RefreshToken)
+			pairs[i], errs[i] = svc.RefreshSession(ctx, pair.RefreshToken)
 		}(i)
 	}
 	close(start)
 	wg.Wait()
 
 	var succeeded int
-	for _, err := range errs {
+	var winningPair auth.TokenPair
+	for i, err := range errs {
 		if err == nil {
 			succeeded++
+			winningPair = pairs[i]
 			continue
 		}
-		require.True(t,
-			errors.Is(err, auth.ErrTokenReused) || errors.Is(err, auth.ErrInvalidToken),
-			"unexpected refresh error: %v", err,
-		)
+		require.ErrorIs(t, err, auth.ErrInvalidToken)
 	}
 	require.Equal(t, 1, succeeded)
+
+	_, err = svc.Authenticate(ctx, winningPair.AccessToken)
+	require.NoError(t, err)
 }
 
 func TestRefreshSessionRejectsMalformedToken(t *testing.T) {

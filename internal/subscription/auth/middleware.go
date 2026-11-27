@@ -177,7 +177,7 @@ func OptionalCookieAuth(
 }
 
 func isInvalidCookieSession(err error) bool {
-	return errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrTokenReused)
+	return errors.Is(err, ErrInvalidToken)
 }
 
 func authenticateCookies(
@@ -205,7 +205,7 @@ func authenticateCookies(
 
 	pair, err := authenticator.RefreshSession(ctx, refreshToken)
 	if err != nil {
-		if !errors.Is(err, ErrInvalidToken) && !errors.Is(err, ErrTokenReused) {
+		if !errors.Is(err, ErrInvalidToken) {
 			httpserver.RecordError(c, "refresh session cookie", err)
 		}
 		return AuthenticatedSession{}, err

@@ -36,7 +36,7 @@ type signupForm struct {
 // handleCookieAuthError redirects expected authentication failures to login and
 // renders an error for internal failures without disguising them as logged out.
 func (h *webHandler) handleCookieAuthError(c *gin.Context, err error) {
-	if errors.Is(err, auth.ErrInvalidToken) || errors.Is(err, auth.ErrTokenReused) {
+	if errors.Is(err, auth.ErrInvalidToken) {
 		next := c.Request.URL.Path
 		c.Redirect(http.StatusSeeOther, "/login?next="+url.QueryEscape(next))
 		return
