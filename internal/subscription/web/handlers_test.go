@@ -661,7 +661,7 @@ func TestCookieAuthRefreshesExpiredAccessToken(t *testing.T) {
 	cookies := auth.NewCookieManager(auth.CookieConfig{BaseURL: "http://localhost:3000"})
 
 	router := gin.New()
-	router.Use(auth.OptionalCookieAuth(authSvc, cookies))
+	router.Use(auth.OptionalCookieAuth(authSvc, cookies, (&webHandler{}).handleCookieAuthError))
 	router.GET("/private", func(c *gin.Context) {
 		session, ok := auth.SessionFromContext(c)
 		require.True(t, ok)
@@ -691,7 +691,7 @@ func TestCookieAuthRedirectsWhenRefreshFails(t *testing.T) {
 	cookies := auth.NewCookieManager(auth.CookieConfig{BaseURL: "http://localhost:3000"})
 
 	router := gin.New()
-	router.Use(auth.CookieAuth(authSvc, cookies, (&webHandler{}).redirectToLogin))
+	router.Use(auth.CookieAuth(authSvc, cookies, (&webHandler{}).handleCookieAuthError))
 	router.GET("/private", func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
@@ -708,6 +708,50 @@ func TestCookieAuthRedirectsWhenRefreshFails(t *testing.T) {
 	require.Equal(t, "/login?next=%2Fprivate", w.Header().Get("Location"))
 	require.Less(t, responseCookie(t, w, accessName).MaxAge, 0)
 	require.Less(t, responseCookie(t, w, refreshName).MaxAge, 0)
+}
+
+func TestCookieAuthInternalErrorReturns500AndPreservesCookies(t *testing.T) {
+	authSvc := &fakeAuthService{authenticateErr: errors.New("database unavailable")}
+	cookies := auth.NewCookieManager(auth.CookieConfig{BaseURL: "http://localhost:3000"})
+
+	router := gin.New()
+	router.Use(auth.CookieAuth(authSvc, cookies, (&webHandler{}).handleCookieAuthError))
+	router.GET("/private", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/private", nil)
+	req.AddCookie(&http.Cookie{Name: cookies.AccessName(), Value: "access-token"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.NotEqual(t, http.StatusSeeOther, w.Code)
+	for _, cookie := range w.Result().Cookies() {
+		require.NotEqual(t, cookies.AccessName(), cookie.Name)
+		require.NotEqual(t, cookies.RefreshName(), cookie.Name)
+	}
+}
+
+func TestLogoutInternalAuthErrorDoesNotReportSuccess(t *testing.T) {
+	authSvc := &fakeAuthService{authenticateErr: errors.New("database unavailable")}
+	h, _, cookies, _ := newTestRouterWithAuth(t, &fakeSubsService{}, authSvc)
+
+	csrfCookie, csrfToken := csrfToken(t, h)
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req.AddCookie(csrfCookie)
+	req.AddCookie(&http.Cookie{Name: cookies.AccessName(), Value: "access-token"})
+	req.Header.Set(httpserver.CSRFHeader, csrfToken)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.Empty(t, w.Header().Get("Location"))
+	require.Zero(t, authSvc.revokeSessionID)
+	for _, cookie := range w.Result().Cookies() {
+		require.NotEqual(t, cookies.AccessName(), cookie.Name)
+		require.NotEqual(t, cookies.RefreshName(), cookie.Name)
+	}
 }
 
 func responseCookie(t *testing.T, w *httptest.ResponseRecorder, name string) *http.Cookie {

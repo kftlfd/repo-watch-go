@@ -137,7 +137,9 @@ func CookieAuth(
 	return func(c *gin.Context) {
 		session, err := authenticateCookies(c, authenticator, cookies)
 		if err != nil {
-			cookies.ClearSession(c)
+			if isInvalidCookieSession(err) {
+				cookies.ClearSession(c)
+			}
 			onError(c, err)
 			c.Abort()
 			return
@@ -149,19 +151,33 @@ func CookieAuth(
 }
 
 // OptionalCookieAuth authenticates web requests when a valid cookie-backed
-// session exists and continues anonymously otherwise.
-func OptionalCookieAuth(authenticator CookieAuthenticator, cookies *CookieManager) gin.HandlerFunc {
+// session exists. Invalid credentials continue anonymously; internal failures
+// are passed to onError and abort the request.
+func OptionalCookieAuth(
+	authenticator CookieAuthenticator,
+	cookies *CookieManager,
+	onError AuthErrorHandler,
+) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		session, err := authenticateCookies(c, authenticator, cookies)
 		if err != nil {
-			cookies.ClearSession(c)
-			c.Next()
+			if isInvalidCookieSession(err) {
+				cookies.ClearSession(c)
+				c.Next()
+				return
+			}
+			onError(c, err)
+			c.Abort()
 			return
 		}
 
 		setSession(c, session)
 		c.Next()
 	}
+}
+
+func isInvalidCookieSession(err error) bool {
+	return errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrTokenReused)
 }
 
 func authenticateCookies(
@@ -178,6 +194,7 @@ func authenticateCookies(
 		}
 		if !errors.Is(err, ErrInvalidToken) {
 			httpserver.RecordError(c, "authenticate session cookie", err)
+			return AuthenticatedSession{}, err
 		}
 	}
 
@@ -201,7 +218,9 @@ func authenticateCookies(
 		if !errors.Is(err, ErrInvalidToken) {
 			httpserver.RecordError(c, "authenticate refreshed session cookie", err)
 		}
-		cookies.ClearSession(c)
+		if isInvalidCookieSession(err) {
+			cookies.ClearSession(c)
+		}
 		return AuthenticatedSession{}, err
 	}
 
