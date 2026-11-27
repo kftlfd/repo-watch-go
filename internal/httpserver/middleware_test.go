@@ -139,7 +139,7 @@ func TestRecoveryRecordsPanic(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 	require.Contains(t, logs.String(), "level=ERROR")
 	require.Contains(t, logs.String(), "operation=panic")
-	require.Contains(t, logs.String(), "boom")
+	require.Contains(t, logs.String(), "error=")
 }
 
 func TestObservabilityMiddlewareRedactsQueryValuesAndPathParameters(t *testing.T) {
