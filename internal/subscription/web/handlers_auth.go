@@ -232,10 +232,13 @@ func (h *webHandler) validVerificationToken(c *gin.Context) (string, bool) {
 	return token, true
 }
 
-// localRedirectPath returns next when it is a same-site path and "/" otherwise.
+// localRedirectPath returns next when it is a same-site path, /subscriptions
+// when next is empty, and / for invalid paths.
 func localRedirectPath(next string) string {
-	if next == "" ||
-		!strings.HasPrefix(next, "/") ||
+	if next == "" {
+		return "/subscriptions"
+	}
+	if !strings.HasPrefix(next, "/") ||
 		strings.HasPrefix(next, "//") ||
 		strings.ContainsAny(next, "\\\r\n\t") {
 		return "/"

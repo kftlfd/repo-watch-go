@@ -599,7 +599,7 @@ func TestLoginSetsCookiesAndRotatesCSRF(t *testing.T) {
 	h.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusSeeOther, w.Code)
-	require.Equal(t, "/", w.Header().Get("Location"))
+	require.Equal(t, "/subscriptions", w.Header().Get("Location"))
 	require.Equal(t, "alice@example.com", authSvc.loginEmail)
 	require.Equal(t, "correct horse battery staple", authSvc.loginPassword)
 
