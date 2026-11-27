@@ -25,6 +25,14 @@ type fakeMetrics struct{}
 
 func (fakeMetrics) HTTPRequest(string, string, int, time.Duration) {}
 
+type recordingMetrics struct {
+	route string
+}
+
+func (m *recordingMetrics) HTTPRequest(_ string, route string, _ int, _ time.Duration) {
+	m.route = route
+}
+
 func newTestRouter(t *testing.T, register func(*gin.Engine)) (*gin.Engine, *bytes.Buffer) {
 	t.Helper()
 
@@ -93,6 +101,25 @@ func TestObservabilityMiddlewareLogsClientErrorAsWarning(t *testing.T) {
 	require.Contains(t, logs.String(), "level=WARN")
 	require.Contains(t, logs.String(), "msg=request")
 	require.NotContains(t, logs.String(), "request failed")
+}
+
+func TestObservabilityMiddlewareUsesUnmatchedRouteLabel(t *testing.T) {
+	logs := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	metrics := &recordingMetrics{}
+	router := gin.New()
+	router.Use(ObservabilityMiddleware(logger, metrics, ObservabilityConfig{}))
+	router.NoRoute(func(c *gin.Context) {
+		c.Status(http.StatusNotFound)
+	})
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/missing/secret-token", nil))
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+	require.Equal(t, "unmatched", metrics.route)
+	require.Contains(t, logs.String(), "path=unmatched")
+	require.NotContains(t, logs.String(), "secret-token")
 }
 
 func TestRecoveryRecordsPanic(t *testing.T) {

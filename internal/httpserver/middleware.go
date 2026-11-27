@@ -36,6 +36,10 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics, cfg ObservabilityCo
 		ctx := c.Request.Context()
 		start := time.Now()
 		route := c.FullPath()
+		routeLabel := route
+		if routeLabel == "" {
+			routeLabel = "unmatched"
+		}
 		var queryKeys []string
 		for key := range c.Request.URL.Query() {
 			if _, ok := allowedQueryKeys[key]; ok {
@@ -95,7 +99,7 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics, cfg ObservabilityCo
 			slog.String("request_id", requestID),
 			slog.String("correlation_id", requestID),
 			slog.String("method", c.Request.Method),
-			slog.String("path", route),
+			slog.String("path", routeLabel),
 			slog.Int("status", status),
 			slog.String("latency", duration.String()),
 			// slog.String("client_ip", c.ClientIP()),
@@ -122,7 +126,7 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics, cfg ObservabilityCo
 
 		attrs = append(attrs, observability.TraceLogAttrs(ctx)...)
 
-		m.HTTPRequest(c.Request.Method, route, status, duration)
+		m.HTTPRequest(c.Request.Method, routeLabel, status, duration)
 
 		switch {
 		case hasError || status >= 500:
