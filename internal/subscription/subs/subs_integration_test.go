@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -653,4 +654,66 @@ func TestConcurrentUnsubscribeDecrementsRepositoryOnce(t *testing.T) {
 	emails, err := db.Queries.GetEventTypeCount(ctx, events.EventEmailQueued)
 	require.NoError(t, err)
 	require.Equal(t, int64(3), emails)
+}
+
+func TestConcurrentConfirmAndAuthenticatedSubscribeDoesNotDeadlock(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	svc := newTestService(db)
+
+	for i := range 5 {
+		email := mustEmail(t, fmt.Sprintf("confirm-subscribe-%d@example.com", i))
+		repo := fmt.Sprintf("owner/confirm-subscribe-%d", i)
+		_, confirmToken := createPendingSubscription(t, ctx, db, svc, email, repo)
+
+		errs := runConcurrently(
+			func() error { return svc.ConfirmSubscription(ctx, confirmToken) },
+			func() error { return svc.CreateSubscription(ctx, email, repo, true) },
+		)
+		for _, err := range errs {
+			require.True(t,
+				err == nil ||
+					errors.Is(err, sql.ErrNoRows) ||
+					errors.Is(err, subs.ErrSubscriptionAlreadyActive) ||
+					errors.Is(err, subs.ErrSubscriptionConflict),
+				"unexpected confirmation/activation error: %v", err,
+			)
+		}
+
+		sub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+			Email: email.String(), RepositoryID: repo,
+		})
+		require.NoError(t, err)
+		require.True(t, sub.Active)
+	}
+}
+
+func TestConcurrentTokenAndRepositoryUnsubscribeDoesNotDeadlock(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	svc := newTestService(db)
+
+	for i := range 5 {
+		email := mustEmail(t, fmt.Sprintf("token-repo-unsub-%d@example.com", i))
+		repo := fmt.Sprintf("owner/token-repo-unsub-%d", i)
+		_, confirmToken := createPendingSubscription(t, ctx, db, svc, email, repo)
+		unsubToken := confirmSubscription(t, ctx, db, svc, confirmToken)
+
+		errs := runConcurrently(
+			func() error { return svc.DeactivateSubscription(ctx, unsubToken) },
+			func() error { return svc.DeactivateSubscriptionByRepo(ctx, email, repo) },
+		)
+		for _, err := range errs {
+			require.True(t,
+				err == nil || errors.Is(err, sql.ErrNoRows) || errors.Is(err, subs.ErrSubscriptionAlreadyInactive),
+				"unexpected unsubscribe error: %v", err,
+			)
+		}
+
+		sub, err := db.Queries.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+			Email: email.String(), RepositoryID: repo,
+		})
+		require.NoError(t, err)
+		require.False(t, sub.Active)
+	}
 }

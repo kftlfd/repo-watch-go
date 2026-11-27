@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -306,4 +307,69 @@ func TestRefreshSessionRejectsMalformedToken(t *testing.T) {
 
 	_, err := svc.RefreshSession(context.Background(), "not-a-token")
 	require.ErrorIs(t, err, auth.ErrInvalidToken)
+}
+
+func TestConcurrentVerifyAndResendDoesNotDeadlock(t *testing.T) {
+	svc, queries := newAuthService(t)
+
+	for i := range 5 {
+		email := mustEmail(t, fmt.Sprintf("verify-resend-%d@example.com", i))
+		require.NoError(t, svc.Signup(t.Context(), email, "correct horse battery staple"))
+		token := latestVerificationToken(t, queries)
+
+		var wg sync.WaitGroup
+		var verifyErr, resendErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			verifyErr = svc.VerifyEmail(t.Context(), token)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			resendErr = svc.ResendVerification(t.Context(), email)
+		}()
+		close(start)
+		wg.Wait()
+
+		require.True(t, verifyErr == nil || errors.Is(verifyErr, auth.ErrInvalidToken),
+			"unexpected verification error: %v", verifyErr)
+		require.NoError(t, resendErr)
+	}
+}
+
+func TestConcurrentRefreshAndLogoutDoesNotDeadlock(t *testing.T) {
+	svc, queries := newAuthService(t)
+
+	for i := range 5 {
+		email := mustEmail(t, fmt.Sprintf("refresh-logout-%d@example.com", i))
+		createUser(t, queries, email.String())
+		pair, err := svc.CreateSession(t.Context(), email)
+		require.NoError(t, err)
+		authenticated, err := svc.Authenticate(t.Context(), pair.AccessToken)
+		require.NoError(t, err)
+
+		var wg sync.WaitGroup
+		var refreshErr, logoutErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, refreshErr = svc.RefreshSession(t.Context(), pair.RefreshToken)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			logoutErr = svc.RevokeSession(t.Context(), authenticated.Session.ID)
+		}()
+		close(start)
+		wg.Wait()
+
+		require.True(t, refreshErr == nil || errors.Is(refreshErr, auth.ErrInvalidToken),
+			"unexpected refresh error: %v", refreshErr)
+		require.NoError(t, logoutErr)
+	}
 }

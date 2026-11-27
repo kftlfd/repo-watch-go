@@ -184,18 +184,31 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 
 	qtx := s.q.WithTx(tx)
 
-	t, err := qtx.FindSubscriptionTokenWDateForUpdate(ctx, dbGen.FindSubscriptionTokenWDateForUpdateParams{
+	tokenParams := dbGen.FindSubscriptionTokenWDateParams{
 		TokenType: TokenTypeConfirm,
 		TokenHash: hashToken(token),
 		CreatedAt: time.Now().Add(-SubscriptionTokenConfirmTTL),
-	})
+	}
+	candidate, err := qtx.FindSubscriptionTokenWDate(ctx, tokenParams)
 	if err != nil {
 		return err
 	}
 
-	sub, err := qtx.GetSubscriptionByID(ctx, t.SubscriptionID)
+	sub, err := qtx.GetSubscriptionByIDForUpdate(ctx, candidate.SubscriptionID)
 	if err != nil {
 		return err
+	}
+
+	t, err := qtx.FindSubscriptionTokenWDateForUpdate(ctx, dbGen.FindSubscriptionTokenWDateForUpdateParams{
+		TokenType: tokenParams.TokenType,
+		TokenHash: tokenParams.TokenHash,
+		CreatedAt: tokenParams.CreatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	if t.SubscriptionID != sub.ID {
+		return sql.ErrNoRows
 	}
 
 	if err = s.activateSubscription(ctx, qtx, sub); err != nil {
@@ -223,17 +236,29 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 
 	qtx := s.q.WithTx(tx)
 
-	t, err := qtx.FindSubscriptionTokenForUpdate(ctx, dbGen.FindSubscriptionTokenForUpdateParams{
+	tokenParams := dbGen.FindSubscriptionTokenParams{
 		TokenType: TokenTypeUnsub,
 		TokenHash: hashToken(token),
-	})
+	}
+	candidate, err := qtx.FindSubscriptionToken(ctx, tokenParams)
 	if err != nil {
 		return err
 	}
 
-	sub, err := qtx.GetSubscriptionByID(ctx, t.SubscriptionID)
+	sub, err := qtx.GetSubscriptionByIDForUpdate(ctx, candidate.SubscriptionID)
 	if err != nil {
 		return err
+	}
+
+	t, err := qtx.FindSubscriptionTokenForUpdate(ctx, dbGen.FindSubscriptionTokenForUpdateParams{
+		TokenType: tokenParams.TokenType,
+		TokenHash: tokenParams.TokenHash,
+	})
+	if err != nil {
+		return err
+	}
+	if t.SubscriptionID != sub.ID {
+		return sql.ErrNoRows
 	}
 
 	if err = s.deactivateSubscription(ctx, qtx, sub); err != nil {

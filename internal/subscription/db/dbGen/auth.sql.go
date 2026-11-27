@@ -170,6 +170,31 @@ func (q *Queries) DeleteUserTokensByEmailAndType(ctx context.Context, arg Delete
 	return err
 }
 
+const findUserToken = `-- name: FindUserToken :one
+SELECT id, user_email, token_type, token_hash, created_at
+FROM user_tokens
+WHERE token_type = $1
+    AND token_hash = $2
+`
+
+type FindUserTokenParams struct {
+	TokenType string
+	TokenHash string
+}
+
+func (q *Queries) FindUserToken(ctx context.Context, arg FindUserTokenParams) (UserToken, error) {
+	row := q.db.QueryRowContext(ctx, findUserToken, arg.TokenType, arg.TokenHash)
+	var i UserToken
+	err := row.Scan(
+		&i.ID,
+		&i.UserEmail,
+		&i.TokenType,
+		&i.TokenHash,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const findUserTokenForUpdate = `-- name: FindUserTokenForUpdate :one
 SELECT id, user_email, token_type, token_hash, created_at
 FROM user_tokens

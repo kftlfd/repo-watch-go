@@ -17,6 +17,12 @@ SELECT *
 FROM subscriptions
 WHERE id = $1;
 
+-- name: GetSubscriptionByIDForUpdate :one
+SELECT *
+FROM subscriptions
+WHERE id = $1
+FOR UPDATE;
+
 -- name: ActivateSubscription :one
 UPDATE subscriptions
 SET

@@ -166,6 +166,28 @@ func (q *Queries) GetSubscriptionByID(ctx context.Context, id int32) (Subscripti
 	return i, err
 }
 
+const getSubscriptionByIDForUpdate = `-- name: GetSubscriptionByIDForUpdate :one
+SELECT id, email, repository_id, active, active_version, created_at, updated_at
+FROM subscriptions
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetSubscriptionByIDForUpdate(ctx context.Context, id int32) (Subscription, error) {
+	row := q.db.QueryRowContext(ctx, getSubscriptionByIDForUpdate, id)
+	var i Subscription
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.RepositoryID,
+		&i.Active,
+		&i.ActiveVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listSubscriptionsByEmail = `-- name: ListSubscriptionsByEmail :many
 SELECT
     repositories.id

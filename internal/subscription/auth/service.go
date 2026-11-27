@@ -275,15 +275,36 @@ func (s *Service) VerifyEmail(ctx context.Context, token string) error {
 
 	qtx := s.q.WithTx(tx)
 
-	userToken, err := qtx.FindUserTokenForUpdate(ctx, dbGen.FindUserTokenForUpdateParams{
+	tokenHash := securetoken.Hash(token)
+	candidate, err := qtx.FindUserToken(ctx, dbGen.FindUserTokenParams{
 		TokenType: UserTokenTypeVerify,
-		TokenHash: securetoken.Hash(token),
+		TokenHash: tokenHash,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrInvalidToken
 	}
 	if err != nil {
 		return fmt.Errorf("find verification token: %w", err)
+	}
+
+	if _, err = qtx.GetUserByEmailForUpdate(ctx, candidate.UserEmail); errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidToken
+	} else if err != nil {
+		return fmt.Errorf("lock verification user: %w", err)
+	}
+
+	userToken, err := qtx.FindUserTokenForUpdate(ctx, dbGen.FindUserTokenForUpdateParams{
+		TokenType: UserTokenTypeVerify,
+		TokenHash: tokenHash,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidToken
+	}
+	if err != nil {
+		return fmt.Errorf("lock verification token: %w", err)
+	}
+	if userToken.UserEmail != candidate.UserEmail {
+		return ErrInvalidToken
 	}
 
 	if !s.now().Before(userToken.CreatedAt.Add(UserTokenVerifyTTL)) {
@@ -371,6 +392,35 @@ func (s *Service) Login(ctx context.Context, email identity.Email, password stri
 	return s.CreateSession(ctx, email)
 }
 
+// lockSessionAndRefreshToken locks the parent session before the token. The
+// unlocked candidate lookup only discovers the session; the locked token must
+// still match it before either refresh or logout can proceed.
+func lockSessionAndRefreshToken(
+	ctx context.Context,
+	qtx *dbGen.Queries,
+	tokenHash string,
+) (dbGen.Session, dbGen.RefreshToken, error) {
+	candidate, err := qtx.GetRefreshTokenByHash(ctx, tokenHash)
+	if err != nil {
+		return dbGen.Session{}, dbGen.RefreshToken{}, err
+	}
+
+	session, err := qtx.GetSessionByIDForUpdate(ctx, candidate.SessionID)
+	if err != nil {
+		return dbGen.Session{}, dbGen.RefreshToken{}, err
+	}
+
+	refreshToken, err := qtx.GetRefreshTokenByHashForUpdate(ctx, tokenHash)
+	if err != nil {
+		return dbGen.Session{}, dbGen.RefreshToken{}, err
+	}
+	if refreshToken.SessionID != session.ID {
+		return dbGen.Session{}, dbGen.RefreshToken{}, sql.ErrNoRows
+	}
+
+	return session, refreshToken, nil
+}
+
 // RevokeSessionByRefreshToken revokes the session that owns a refresh token.
 // It is used by logout when the access token has already expired.
 func (s *Service) RevokeSessionByRefreshToken(ctx context.Context, rawRefreshToken string) error {
@@ -386,12 +436,12 @@ func (s *Service) RevokeSessionByRefreshToken(ctx context.Context, rawRefreshTok
 
 	qtx := s.q.WithTx(tx)
 
-	refreshToken, err := qtx.GetRefreshTokenByHashForUpdate(ctx, securetoken.Hash(rawRefreshToken))
+	_, refreshToken, err := lockSessionAndRefreshToken(ctx, qtx, securetoken.Hash(rawRefreshToken))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrInvalidToken
 	}
 	if err != nil {
-		return fmt.Errorf("find refresh token: %w", err)
+		return fmt.Errorf("lock session refresh token: %w", err)
 	}
 
 	if err = s.revokeSession(ctx, qtx, refreshToken.SessionID); err != nil {
@@ -451,7 +501,7 @@ func (s *Service) RefreshSession(ctx context.Context, rawRefreshToken string) (T
 
 	qtx := s.q.WithTx(tx)
 
-	refreshToken, err := qtx.GetRefreshTokenByHashForUpdate(ctx, securetoken.Hash(rawRefreshToken))
+	session, refreshToken, err := lockSessionAndRefreshToken(ctx, qtx, securetoken.Hash(rawRefreshToken))
 	if errors.Is(err, sql.ErrNoRows) {
 		return TokenPair{}, ErrInvalidToken
 	}
@@ -475,13 +525,6 @@ func (s *Service) RefreshSession(ctx context.Context, rawRefreshToken string) (T
 		return TokenPair{}, ErrInvalidToken
 	}
 
-	session, err := qtx.GetSessionByIDForUpdate(ctx, refreshToken.SessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return TokenPair{}, ErrInvalidToken
-	}
-	if err != nil {
-		return TokenPair{}, err
-	}
 	if session.RevokedAt.Valid || !now.Before(session.ExpiresAt) {
 		return TokenPair{}, ErrInvalidToken
 	}

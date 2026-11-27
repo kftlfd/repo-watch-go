@@ -107,6 +107,12 @@ FROM user_tokens
 WHERE user_email = $1
     AND token_type = $2;
 
+-- name: FindUserToken :one
+SELECT *
+FROM user_tokens
+WHERE token_type = $1
+    AND token_hash = $2;
+
 -- name: FindUserTokenForUpdate :one
 SELECT *
 FROM user_tokens
