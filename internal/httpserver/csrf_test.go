@@ -63,6 +63,16 @@ func TestNewCSRFRejectsInvalidConfig(t *testing.T) {
 
 	_, err = NewCSRF(CSRFConfig{Secret: []byte(strings.Repeat("s", 32))})
 	require.ErrorContains(t, err, "app origin")
+
+	_, err = NewCSRF(CSRFConfig{
+		Secret: []byte(strings.Repeat("s", 32)), AppOrigin: "ftp://example.test",
+	})
+	require.ErrorContains(t, err, "invalid csrf app origin")
+
+	_, err = NewCSRF(CSRFConfig{
+		Secret: []byte(strings.Repeat("s", 32)), AppOrigin: "https://example.test/path",
+	})
+	require.ErrorContains(t, err, "invalid csrf app origin")
 }
 
 func TestNewCSRFDerivesSecureConfigFromBaseURL(t *testing.T) {
@@ -73,15 +83,47 @@ func TestNewCSRFDerivesSecureConfigFromBaseURL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "__Host-rw_csrf", csrf.CookieName())
 	require.True(t, csrf.secure)
-	require.Equal(t, "https://example.test", csrf.appOrigin)
+	require.Equal(t, "https://example.test:443", csrf.appOrigin)
 }
 
 func TestNewCSRFRejectsInvalidBaseURL(t *testing.T) {
-	_, err := NewCSRF(CSRFConfig{
-		Secret:  []byte(strings.Repeat("s", 32)),
-		BaseURL: "not-a-url",
-	})
-	require.ErrorContains(t, err, "invalid csrf base URL")
+	for _, baseURL := range []string{"not-a-url", "ftp://example.test", "https://user@example.test"} {
+		_, err := NewCSRF(CSRFConfig{
+			Secret:  []byte(strings.Repeat("s", 32)),
+			BaseURL: baseURL,
+		})
+		require.ErrorContains(t, err, "invalid csrf base URL")
+	}
+}
+
+func TestCSRFOriginCanonicalizesDefaultPorts(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		origin  string
+		want    bool
+	}{
+		{name: "https config explicit port", baseURL: "https://example.test:443", origin: "https://example.test", want: true},
+		{name: "https origin explicit port", baseURL: "https://example.test", origin: "https://example.test:443", want: true},
+		{name: "http config explicit port", baseURL: "http://example.test:80", origin: "http://example.test", want: true},
+		{name: "case insensitive", baseURL: "HTTPS://EXAMPLE.TEST", origin: "https://example.test:443", want: true},
+		{name: "wrong port", baseURL: "https://example.test:444", origin: "https://example.test", want: false},
+		{name: "wrong scheme", baseURL: "https://example.test", origin: "http://example.test", want: false},
+		{name: "origin path", baseURL: "https://example.test", origin: "https://example.test/path", want: false},
+		{name: "origin userinfo", baseURL: "https://example.test", origin: "https://user@example.test", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			csrf, err := NewCSRF(CSRFConfig{
+				Secret: []byte(strings.Repeat("s", 32)), BaseURL: tt.baseURL,
+			})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/", nil)
+			req.Header.Set("Origin", tt.origin)
+			require.Equal(t, tt.want, csrf.validRequestOrigin(req))
+		})
+	}
 }
 
 func TestCSRFMiddlewareSetsTokenOnSafeRequest(t *testing.T) {

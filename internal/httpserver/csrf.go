@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -59,16 +60,20 @@ func NewCSRF(cfg CSRFConfig) (*CSRF, error) {
 	}
 	if cfg.BaseURL != "" {
 		u, err := url.Parse(cfg.BaseURL)
-		if err != nil || u.Scheme == "" || u.Host == "" {
+		if err != nil || u.Host == "" || u.User != nil || !validHTTPScheme(u.Scheme) {
 			return nil, fmt.Errorf("invalid csrf base URL")
 		}
 		cfg.Secure = cfg.Secure || strings.EqualFold(u.Scheme, "https")
 		if cfg.AppOrigin == "" {
-			cfg.AppOrigin = strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+			cfg.AppOrigin = strings.ToLower(u.Scheme) + "://" + u.Host
 		}
 	}
 	if cfg.AppOrigin == "" {
 		return nil, fmt.Errorf("csrf app origin is required")
+	}
+	appOrigin, err := canonicalOrigin(cfg.AppOrigin)
+	if err != nil {
+		return nil, fmt.Errorf("invalid csrf app origin: %w", err)
 	}
 	if cfg.CookieName == "" {
 		cfg.CookieName = defaultCSRFCookieName
@@ -81,7 +86,7 @@ func NewCSRF(cfg CSRFConfig) (*CSRF, error) {
 		secret:     slices.Clone(cfg.Secret),
 		cookieName: cfg.CookieName,
 		secure:     cfg.Secure,
-		appOrigin:  strings.TrimRight(cfg.AppOrigin, "/"),
+		appOrigin:  appOrigin,
 	}, nil
 }
 
@@ -191,9 +196,37 @@ func (c *CSRF) sign(nonce string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
+func canonicalOrigin(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || !validHTTPScheme(u.Scheme) ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return "", fmt.Errorf("invalid origin")
+	}
+
+	hostname := strings.ToLower(u.Hostname())
+	if hostname == "" || strings.HasSuffix(u.Host, ":") {
+		return "", fmt.Errorf("invalid origin host")
+	}
+	port := u.Port()
+	if port == "" {
+		if strings.EqualFold(u.Scheme, "https") {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+
+	return strings.ToLower(u.Scheme) + "://" + net.JoinHostPort(hostname, port), nil
+}
+
+func validHTTPScheme(scheme string) bool {
+	return strings.EqualFold(scheme, "http") || strings.EqualFold(scheme, "https")
+}
+
 func (c *CSRF) validRequestOrigin(r *http.Request) bool {
 	if origin := r.Header.Get("Origin"); origin != "" {
-		if !strings.EqualFold(strings.TrimRight(origin, "/"), c.appOrigin) {
+		canonical, err := canonicalOrigin(origin)
+		if err != nil || canonical != c.appOrigin {
 			return false
 		}
 	}
