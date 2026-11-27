@@ -17,9 +17,13 @@ config:
 request:
   variables:
     - name: URL
-      value: http://localhost:9010
+      value: http://localhost:3000
     - name: MANAGE_URL
-      value: http://localhost:9011
+      value: http://localhost:4010
+    - name: accessToken
+      value: ""
+    - name: refreshToken
+      value: ""
 bundled: false
 extensions:
   bruno:

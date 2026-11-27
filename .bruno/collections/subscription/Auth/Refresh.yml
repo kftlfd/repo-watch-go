@@ -1,0 +1,30 @@
+info:
+  name: Refresh
+  type: http
+  seq: 14
+
+http:
+  method: POST
+  url: "{{URL}}/api/auth/refresh"
+  body:
+    type: form-urlencoded
+    data:
+      - name: refresh_token
+        value: "{{refreshToken}}"
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |-
+        if (res.body.access_token) {
+          bru.setVar("accessToken", res.body.access_token);
+          bru.setVar("refreshToken", res.body.refresh_token);
+        }
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true

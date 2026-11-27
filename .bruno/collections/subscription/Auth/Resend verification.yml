@@ -1,0 +1,21 @@
+info:
+  name: Resend verification
+  type: http
+  seq: 12
+
+http:
+  method: POST
+  url: "{{URL}}/api/auth/verify-resend"
+  body:
+    type: form-urlencoded
+    data:
+      - name: email
+        value: me@test.com
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true

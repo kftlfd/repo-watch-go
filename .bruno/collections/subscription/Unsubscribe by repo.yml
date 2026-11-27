@@ -1,0 +1,23 @@
+info:
+  name: Unsubscribe by repo
+  type: http
+  seq: 7
+
+http:
+  method: POST
+  url: "{{URL}}/api/subscriptions/unsubscribe"
+  auth:
+    type: bearer
+    token: "{{accessToken}}"
+  body:
+    type: form-urlencoded
+    data:
+      - name: repo
+        value: torvalds/linux
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
