@@ -15,7 +15,8 @@ const (
 	defaultWriteTimeout      = 30 * time.Second
 	defaultIdleTimeout       = 60 * time.Second
 	defaultShutdownTimeout   = 5 * time.Second
-	defaultMaxBodyBytes      = 1 << 20 // 1MB
+	defaultMaxBodyBytes      = 1 << 20  // 1MB
+	defaultMaxHeaderBytes    = 64 << 10 // 64 KiB
 )
 
 type ServerDeps struct {
@@ -45,6 +46,7 @@ func NewServer(d ServerDeps) *server {
 		ReadTimeout:       timeoutOr(d.ReadTimeout, defaultReadTimeout),
 		WriteTimeout:      timeoutOr(d.WriteTimeout, defaultWriteTimeout),
 		IdleTimeout:       timeoutOr(d.IdleTimeout, defaultIdleTimeout),
+		MaxHeaderBytes:    defaultMaxHeaderBytes,
 	}
 
 	return &server{
