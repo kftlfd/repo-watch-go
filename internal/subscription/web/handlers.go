@@ -111,6 +111,19 @@ func (h *webHandler) createSubscription(
 	})
 }
 
+func (h *webHandler) validToken(c *gin.Context) (string, bool) {
+	token := c.Param("token")
+	if !subs.ValidateToken(token) {
+		render(c, http.StatusBadRequest, "result.html", pageData{
+			Title:   "Invalid link",
+			Message: msgInvalidToken,
+		})
+		return "", false
+	}
+
+	return token, true
+}
+
 func (h *webHandler) handleConfirmPage(c *gin.Context) {
 	if _, ok := h.validToken(c); !ok {
 		return
@@ -183,40 +196,30 @@ func (h *webHandler) handleDeactivateSubscription(c *gin.Context) {
 	})
 }
 
+// requireSession loads a session that required-auth middleware should have
+// installed. A missing session is a middleware or route configuration error,
+// not an unauthenticated user, so it is logged and rendered as a server error.
+func (h *webHandler) requireSession(c *gin.Context) (auth.AuthenticatedSession, bool) {
+	session, err := auth.RequireSession(c)
+	if err != nil {
+		httpserver.RecordError(c, "load authenticated session", err)
+		render(c, http.StatusInternalServerError, "result.html", pageData{
+			Title:   "Something went wrong",
+			Message: msgInternal,
+		})
+		return auth.AuthenticatedSession{}, false
+	}
+
+	return session, true
+}
+
 func (h *webHandler) handleSubscriptionsPage(c *gin.Context) {
 	h.renderSubscriptions(c, http.StatusOK, "")
 }
 
-func (h *webHandler) handleUnsubscribeByRepo(c *gin.Context) {
-	session, ok := auth.SessionFromContext(c)
-	if !ok {
-		c.Redirect(http.StatusSeeOther, "/login?next=%2Fsubscriptions")
-		return
-	}
-
-	email := identity.Email(session.User.Email)
-	if err := h.subsService.DeactivateSubscriptionByRepo(c.Request.Context(), email, c.PostForm("repo")); err != nil {
-		switch {
-		case errors.Is(err, subs.ErrInvalidInput):
-			h.renderSubscriptions(c, http.StatusBadRequest, msgInvalidInput)
-		case errors.Is(err, sql.ErrNoRows):
-			h.renderSubscriptions(c, http.StatusNotFound, msgSubscriptionNotFound)
-		case errors.Is(err, subs.ErrSubscriptionAlreadyInactive):
-			h.renderSubscriptions(c, http.StatusConflict, msgAlreadyUnsubscribed)
-		default:
-			httpserver.RecordError(c, "unsubscribe by repository", err)
-			h.renderSubscriptions(c, http.StatusInternalServerError, msgInternal)
-		}
-		return
-	}
-
-	c.Redirect(http.StatusSeeOther, "/subscriptions?unsubscribed=1")
-}
-
 func (h *webHandler) renderSubscriptions(c *gin.Context, status int, message string) {
-	session, ok := auth.SessionFromContext(c)
+	session, ok := h.requireSession(c)
 	if !ok {
-		c.Redirect(http.StatusSeeOther, "/login?next=%2Fsubscriptions")
 		return
 	}
 
@@ -243,17 +246,29 @@ func (h *webHandler) renderSubscriptions(c *gin.Context, status int, message str
 	render(c, status, "subscriptions.html", data)
 }
 
-func (h *webHandler) validToken(c *gin.Context) (string, bool) {
-	token := c.Param("token")
-	if !subs.ValidateToken(token) {
-		render(c, http.StatusBadRequest, "result.html", pageData{
-			Title:   "Invalid link",
-			Message: msgInvalidToken,
-		})
-		return "", false
+func (h *webHandler) handleUnsubscribeByRepo(c *gin.Context) {
+	session, ok := h.requireSession(c)
+	if !ok {
+		return
 	}
 
-	return token, true
+	email := identity.Email(session.User.Email)
+	if err := h.subsService.DeactivateSubscriptionByRepo(c.Request.Context(), email, c.PostForm("repo")); err != nil {
+		switch {
+		case errors.Is(err, subs.ErrInvalidInput):
+			h.renderSubscriptions(c, http.StatusBadRequest, msgInvalidInput)
+		case errors.Is(err, sql.ErrNoRows):
+			h.renderSubscriptions(c, http.StatusNotFound, msgSubscriptionNotFound)
+		case errors.Is(err, subs.ErrSubscriptionAlreadyInactive):
+			h.renderSubscriptions(c, http.StatusConflict, msgAlreadyUnsubscribed)
+		default:
+			httpserver.RecordError(c, "unsubscribe by repository", err)
+			h.renderSubscriptions(c, http.StatusInternalServerError, msgInternal)
+		}
+		return
+	}
+
+	c.Redirect(http.StatusSeeOther, "/subscriptions?unsubscribed=1")
 }
 
 func (h *webHandler) renderSubscribeError(c *gin.Context, status int, form subscribeForm, message string) {

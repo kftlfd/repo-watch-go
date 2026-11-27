@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"errors"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 
+	"repo-watch/internal/httpserver"
 	"repo-watch/internal/subscription/api/docs"
 	"repo-watch/internal/subscription/auth"
 	"repo-watch/internal/subscription/identity"
@@ -48,31 +51,41 @@ func RegisterRoutes(rg *gin.RouterGroup, d Deps) {
 		authService: d.AuthService,
 	}
 
-	rg.POST("/subscribe", auth.OptionalBearerAuth(d.AuthService), h.handleCreateSubscription)
-	rg.POST("/confirm/:token", h.handleConfirmSubscription)
-	rg.POST("/unsubscribe/:token", h.handleDeactivateSubscription)
+	rg.GET("/docs", serveScalarDocs)
+	rg.GET("/docs/openapi.json", serveOpenAPISpec)
 
-	subscriptionRoutes := rg.Group("", noStore(), auth.BearerAuth(d.AuthService))
-	subscriptionRoutes.GET("/subscriptions", h.handleListSubscriptions)
-	subscriptionRoutes.POST("/subscriptions/unsubscribe", h.handleUnsubscribeByRepo)
+	subsRoutes := rg.Group("", noStore)
+	subsRoutes.POST("/subscribe", auth.OptionalBearerAuth(d.AuthService, handleAuthError), h.handleCreateSubscription)
+	subsRoutes.POST("/confirm/:token", h.handleConfirmSubscription)
+	subsRoutes.POST("/unsubscribe/:token", h.handleDeactivateSubscription)
 
-	authRoutes := rg.Group("/auth", noStore())
+	subsProtectedRoutes := rg.Group("", noStore, auth.BearerAuth(d.AuthService, handleAuthError))
+	subsProtectedRoutes.GET("/subscriptions", h.handleListSubscriptions)
+	subsProtectedRoutes.POST("/subscriptions/unsubscribe", h.handleUnsubscribeByRepo)
+
+	authRoutes := rg.Group("/auth", noStore)
 	authRoutes.POST("/signup", h.handleSignup)
 	authRoutes.POST("/verify-resend", h.handleResendVerification)
 	authRoutes.POST("/verify/:token", h.handleVerifyEmail)
 	authRoutes.POST("/login", h.handleLogin)
 	authRoutes.POST("/refresh", h.handleRefresh)
 	authRoutes.POST("/logout", h.handleLogout)
-	authRoutes.GET("/me", auth.BearerAuth(d.AuthService), h.handleMe)
+	authRoutes.GET("/me", auth.BearerAuth(d.AuthService, handleAuthError), h.handleMe)
+}
 
-	rg.GET("/docs", serveScalarDocs)
-	rg.GET("/docs/openapi.json", serveOpenAPISpec)
+// handleAuthError maps authentication middleware failures to API responses.
+func handleAuthError(c *gin.Context, err error) {
+	if errors.Is(err, auth.ErrInvalidToken) {
+		respondUnauthorized(c, errUnauthorized, codeUnauthorized)
+		return
+	}
+
+	httpserver.RecordError(c, "authenticate request", err)
+	c.JSON(http.StatusInternalServerError, errorResponse{Error: errInternal})
 }
 
 // prevents caches from retaining auth responses, tokens, or user-specific data.
-func noStore() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Header("Cache-Control", "no-store")
-		c.Next()
-	}
+func noStore(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.Next()
 }

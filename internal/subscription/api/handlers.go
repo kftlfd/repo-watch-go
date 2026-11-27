@@ -174,9 +174,9 @@ func (h *apiHandler) handleDeactivateSubscription(c *gin.Context) {
 // @Failure      500  {object}  errorResponse          "Internal server error"
 // @Router       /subscriptions [get]
 func (h *apiHandler) handleListSubscriptions(c *gin.Context) {
-	session, ok := auth.SessionFromContext(c)
-	if !ok {
-		respondUnauthorized(c, errUnauthorized, codeUnauthorized)
+	session, err := auth.RequireSession(c)
+	if err != nil {
+		h.respondInternalError(c, "load authenticated session", err)
 		return
 	}
 
@@ -216,9 +216,9 @@ func (h *apiHandler) handleListSubscriptions(c *gin.Context) {
 // @Failure      500  {object}  errorResponse    "Internal server error"
 // @Router       /subscriptions/unsubscribe [post]
 func (h *apiHandler) handleUnsubscribeByRepo(c *gin.Context) {
-	session, ok := auth.SessionFromContext(c)
-	if !ok {
-		respondUnauthorized(c, errUnauthorized, codeUnauthorized)
+	session, err := auth.RequireSession(c)
+	if err != nil {
+		h.respondInternalError(c, "load authenticated session", err)
 		return
 	}
 

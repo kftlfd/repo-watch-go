@@ -639,3 +639,17 @@ func TestListSubscriptionsHidesInternalErrors(t *testing.T) {
 	require.NotContains(t, w.Body.String(), "secret list failure")
 	require.Contains(t, logs.String(), "secret list failure")
 }
+
+func TestProtectedHandlerWithoutSessionIsInternalError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := &apiHandler{subsService: &fakeSubsService{}}
+	router := gin.New()
+	router.GET("/subscriptions", h.handleListSubscriptions)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/subscriptions", nil))
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.Contains(t, w.Body.String(), errInternal)
+}

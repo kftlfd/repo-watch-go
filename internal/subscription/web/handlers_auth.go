@@ -33,6 +33,13 @@ type signupForm struct {
 	Password string `form:"password" binding:"required"`
 }
 
+// redirectToLogin sends unauthenticated page requests to the login form while
+// preserving the local path they were trying to reach.
+func (h *webHandler) redirectToLogin(c *gin.Context, _ error) {
+	next := c.Request.URL.Path
+	c.Redirect(http.StatusSeeOther, "/login?next="+url.QueryEscape(next))
+}
+
 func (h *webHandler) handleLoginPage(c *gin.Context) {
 	data := pageData{
 		Title: "Log in",

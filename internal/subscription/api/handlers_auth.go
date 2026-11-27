@@ -283,9 +283,9 @@ func (h *apiHandler) handleLogout(c *gin.Context) {
 // @Failure      500  {object}  errorResponse  "Internal server error"
 // @Router       /auth/me [get]
 func (h *apiHandler) handleMe(c *gin.Context) {
-	authenticated, ok := auth.SessionFromContext(c)
-	if !ok {
-		respondUnauthorized(c, errUnauthorized, codeUnauthorized)
+	authenticated, err := auth.RequireSession(c)
+	if err != nil {
+		h.respondInternalError(c, "load authenticated session", err)
 		return
 	}
 

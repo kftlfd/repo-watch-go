@@ -54,7 +54,7 @@ func RegisterRoutes(rg *gin.RouterGroup, d Deps) {
 	base.Use(d.CSRF.Middleware())
 
 	pages := base.Group("")
-	pages.Use(auth.CookieAuth(h.authService, h.cookies, auth.CookieAuthConfig{}))
+	pages.Use(auth.OptionalCookieAuth(h.authService, h.cookies))
 
 	pages.GET("/", h.handleSubscribePage)
 	pages.POST("/subscribe", h.handleCreateSubscription)
@@ -78,7 +78,7 @@ func RegisterRoutes(rg *gin.RouterGroup, d Deps) {
 	pages.POST("/verify/:token", h.handleVerifyEmail)
 
 	protected := base.Group("")
-	protected.Use(auth.CookieAuth(h.authService, h.cookies, auth.CookieAuthConfig{Required: true}))
+	protected.Use(auth.CookieAuth(h.authService, h.cookies, h.redirectToLogin))
 
 	protected.GET("/subscriptions", h.handleSubscriptionsPage)
 	protected.POST("/subscriptions/unsubscribe", h.handleUnsubscribeByRepo)

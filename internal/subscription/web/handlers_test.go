@@ -661,7 +661,7 @@ func TestCookieAuthRefreshesExpiredAccessToken(t *testing.T) {
 	cookies := auth.NewCookieManager(auth.CookieConfig{BaseURL: "http://localhost:3000"})
 
 	router := gin.New()
-	router.Use(auth.CookieAuth(authSvc, cookies, auth.CookieAuthConfig{}))
+	router.Use(auth.OptionalCookieAuth(authSvc, cookies))
 	router.GET("/private", func(c *gin.Context) {
 		session, ok := auth.SessionFromContext(c)
 		require.True(t, ok)
@@ -691,7 +691,7 @@ func TestCookieAuthRedirectsWhenRefreshFails(t *testing.T) {
 	cookies := auth.NewCookieManager(auth.CookieConfig{BaseURL: "http://localhost:3000"})
 
 	router := gin.New()
-	router.Use(auth.CookieAuth(authSvc, cookies, auth.CookieAuthConfig{Required: true}))
+	router.Use(auth.CookieAuth(authSvc, cookies, (&webHandler{}).redirectToLogin))
 	router.GET("/private", func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
@@ -1149,4 +1149,18 @@ func TestLogoutPage(t *testing.T) {
 	require.Contains(t, w.Body.String(), msgLogoutConfirmation)
 	require.Contains(t, w.Body.String(), `action="/logout"`)
 	require.Contains(t, w.Body.String(), `name="csrf_token"`)
+}
+
+func TestProtectedPageWithoutSessionIsInternalError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := &webHandler{subsService: &fakeSubsService{}}
+	router := gin.New()
+	router.GET("/subscriptions", h.handleSubscriptionsPage)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/subscriptions", nil))
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.Contains(t, w.Body.String(), msgInternal)
 }

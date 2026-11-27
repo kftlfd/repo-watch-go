@@ -3,8 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -12,11 +10,12 @@ import (
 	"repo-watch/internal/httpserver"
 )
 
-const (
-	authSessionKey = "auth.authenticated_session"
-	unauthorized   = "unauthorized"
-	internalError  = "internal server error"
-)
+const authSessionKey = "auth.authenticated_session"
+
+// ErrNoSession indicates that a protected handler ran without authentication
+// middleware installing a session. It signals a routing or middleware
+// configuration error rather than an authentication failure.
+var ErrNoSession = errors.New("authenticated session missing from request context")
 
 // setSession stores an authenticated session in the request context.
 func setSession(c *gin.Context, session AuthenticatedSession) {
@@ -24,7 +23,7 @@ func setSession(c *gin.Context, session AuthenticatedSession) {
 }
 
 // SessionFromContext returns the authenticated session installed by
-// BearerAuth, OptionalBearerAuth, or CookieAuth.
+// BearerAuth, OptionalBearerAuth, CookieAuth, or OptionalCookieAuth.
 func SessionFromContext(c *gin.Context) (AuthenticatedSession, bool) {
 	value, ok := c.Get(authSessionKey)
 	if !ok {
@@ -35,30 +34,58 @@ func SessionFromContext(c *gin.Context) (AuthenticatedSession, bool) {
 	return authenticated, ok
 }
 
+// RequireSession returns the session installed by authentication middleware.
+// A missing session returns ErrNoSession, which protected handlers should treat
+// as an internal configuration error.
+func RequireSession(c *gin.Context) (AuthenticatedSession, error) {
+	session, ok := SessionFromContext(c)
+	if !ok {
+		return AuthenticatedSession{}, ErrNoSession
+	}
+
+	return session, nil
+}
+
+// AuthErrorHandler handles a request that authentication middleware could not
+// authenticate. It is responsible for writing the response; the middleware
+// aborts the request afterwards.
+type AuthErrorHandler func(c *gin.Context, err error)
+
 // Authenticator validates an access token against the session store.
 type Authenticator interface {
 	Authenticate(ctx context.Context, accessToken string) (AuthenticatedSession, error)
 }
 
 // BearerAuth requires a valid Bearer access token and stores the authenticated
-// session in the request context.
-func BearerAuth(authenticator Authenticator) gin.HandlerFunc {
+// session in the request context. onError handles missing, invalid, and
+// internal authentication failures.
+func BearerAuth(authenticator Authenticator, onError AuthErrorHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !requireBearerAuth(c, authenticator) {
+		session, err := authenticateBearer(c, authenticator)
+		if err != nil {
+			onError(c, err)
+			c.Abort()
 			return
 		}
+
+		setSession(c, session)
 		c.Next()
 	}
 }
 
 // OptionalBearerAuth authenticates a request when an Authorization header is
-// present but allows requests without one to continue anonymously.
-func OptionalBearerAuth(authenticator Authenticator) gin.HandlerFunc {
+// present but allows requests without one to continue anonymously. A present
+// but invalid token is rejected via onError.
+func OptionalBearerAuth(authenticator Authenticator, onError AuthErrorHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if strings.TrimSpace(c.GetHeader("Authorization")) != "" {
-			if !requireBearerAuth(c, authenticator) {
+			session, err := authenticateBearer(c, authenticator)
+			if err != nil {
+				onError(c, err)
+				c.Abort()
 				return
 			}
+			setSession(c, session)
 		}
 		c.Next()
 	}
@@ -81,31 +108,16 @@ func ParseBearerToken(header string) (string, bool) {
 	return token, true
 }
 
-func requireBearerAuth(c *gin.Context, authenticator Authenticator) bool {
+func authenticateBearer(
+	c *gin.Context,
+	authenticator Authenticator,
+) (AuthenticatedSession, error) {
 	token, ok := ParseBearerToken(c.GetHeader("Authorization"))
 	if !ok {
-		abortUnauthorized(c)
-		return false
+		return AuthenticatedSession{}, ErrInvalidToken
 	}
 
-	authenticated, err := authenticator.Authenticate(c.Request.Context(), token)
-	if errors.Is(err, ErrInvalidToken) {
-		abortUnauthorized(c)
-		return false
-	}
-	if err != nil {
-		httpserver.RecordError(c, "authenticate request", err)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": internalError})
-		return false
-	}
-
-	setSession(c, authenticated)
-	return true
-}
-
-func abortUnauthorized(c *gin.Context) {
-	c.Header("WWW-Authenticate", "Bearer")
-	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": unauthorized, "code": unauthorized})
+	return authenticator.Authenticate(c.Request.Context(), token)
 }
 
 // CookieAuthenticator validates access tokens and refreshes web sessions.
@@ -114,35 +126,40 @@ type CookieAuthenticator interface {
 	RefreshSession(ctx context.Context, refreshToken string) (TokenPair, error)
 }
 
-// CookieAuthConfig controls cookie session behavior for web routes.
-type CookieAuthConfig struct {
-	Required  bool
-	LoginPath string
-}
-
-// CookieAuth authenticates web requests from access and refresh cookies and
-// transparently refreshes expired access tokens. Required routes redirect to
-// LoginPath when no valid session can be established.
-func CookieAuth(authenticator CookieAuthenticator, cookies *CookieManager, cfg CookieAuthConfig) gin.HandlerFunc {
-	if cfg.LoginPath == "" {
-		cfg.LoginPath = "/login"
-	}
-
+// CookieAuth requires a valid cookie-backed session. It authenticates web
+// requests from access and refresh cookies, transparently refreshes expired
+// access tokens, and calls onError when no session can be established.
+func CookieAuth(
+	authenticator CookieAuthenticator,
+	cookies *CookieManager,
+	onError AuthErrorHandler,
+) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if session, ok := authenticateCookies(c, authenticator, cookies); ok {
-			setSession(c, session)
-			c.Next()
-			return
-		}
-
-		cookies.ClearSession(c)
-		if cfg.Required {
-			next := c.Request.URL.Path
-			c.Redirect(http.StatusSeeOther, cfg.LoginPath+"?next="+url.QueryEscape(next))
+		session, err := authenticateCookies(c, authenticator, cookies)
+		if err != nil {
+			cookies.ClearSession(c)
+			onError(c, err)
 			c.Abort()
 			return
 		}
 
+		setSession(c, session)
+		c.Next()
+	}
+}
+
+// OptionalCookieAuth authenticates web requests when a valid cookie-backed
+// session exists and continues anonymously otherwise.
+func OptionalCookieAuth(authenticator CookieAuthenticator, cookies *CookieManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		session, err := authenticateCookies(c, authenticator, cookies)
+		if err != nil {
+			cookies.ClearSession(c)
+			c.Next()
+			return
+		}
+
+		setSession(c, session)
 		c.Next()
 	}
 }
@@ -151,13 +168,13 @@ func authenticateCookies(
 	c *gin.Context,
 	authenticator CookieAuthenticator,
 	cookies *CookieManager,
-) (AuthenticatedSession, bool) {
+) (AuthenticatedSession, error) {
 	ctx := c.Request.Context()
 
 	if accessToken, ok := cookies.AccessToken(c); ok {
 		session, err := authenticator.Authenticate(ctx, accessToken)
 		if err == nil {
-			return session, true
+			return session, nil
 		}
 		if !errors.Is(err, ErrInvalidToken) {
 			httpserver.RecordError(c, "authenticate session cookie", err)
@@ -166,7 +183,7 @@ func authenticateCookies(
 
 	refreshToken, ok := cookies.RefreshToken(c)
 	if !ok {
-		return AuthenticatedSession{}, false
+		return AuthenticatedSession{}, ErrInvalidToken
 	}
 
 	pair, err := authenticator.RefreshSession(ctx, refreshToken)
@@ -174,7 +191,7 @@ func authenticateCookies(
 		if !errors.Is(err, ErrInvalidToken) && !errors.Is(err, ErrTokenReused) {
 			httpserver.RecordError(c, "refresh session cookie", err)
 		}
-		return AuthenticatedSession{}, false
+		return AuthenticatedSession{}, err
 	}
 
 	cookies.SetSession(c, pair)
@@ -185,8 +202,8 @@ func authenticateCookies(
 			httpserver.RecordError(c, "authenticate refreshed session cookie", err)
 		}
 		cookies.ClearSession(c)
-		return AuthenticatedSession{}, false
+		return AuthenticatedSession{}, err
 	}
 
-	return session, true
+	return session, nil
 }
