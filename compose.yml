@@ -151,4 +151,6 @@ services:
 
 volumes:
   postgres-data:
+    name: rw-go_postgres
   rabbitmq-data:
+    name: rw-go_rabbitmq

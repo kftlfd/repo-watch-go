@@ -32,4 +32,6 @@ services:
 
 volumes:
   prometheus-data:
+    name: rw-go_prometheus
   grafana-data:
+    name: rw-go_grafana
