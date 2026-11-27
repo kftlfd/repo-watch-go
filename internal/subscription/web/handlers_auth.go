@@ -63,7 +63,7 @@ func (h *webHandler) handleLoginPage(c *gin.Context) {
 func (h *webHandler) handleLogin(c *gin.Context) {
 	form := loginForm{}
 	if err := c.ShouldBind(&form); err != nil {
-		h.renderLoginError(c, http.StatusUnauthorized, form.Email, form.Next, msgInvalidCredentials)
+		h.renderLoginError(c, http.StatusBadRequest, form.Email, form.Next, msgInvalidCredentials)
 		return
 	}
 

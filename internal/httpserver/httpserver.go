@@ -57,7 +57,8 @@ func NewServer(d ServerDeps) *server {
 }
 
 // LimitRequestBody rejects reads beyond maxBytes with http.MaxBytesError.
-// Handlers can use errors.As with *http.MaxBytesError to return a clear 413.
+// Handlers can use errors.AsType[*http.MaxBytesError] for 413 errors,
+// but it is preferred to return a generic 400 responses.
 func limitRequestBody(maxBytes int64, next http.Handler) http.Handler {
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxBodyBytes

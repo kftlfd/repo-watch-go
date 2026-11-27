@@ -468,12 +468,6 @@ const docTemplate = `{
                             "$ref": "#/definitions/api.errorResponse"
                         }
                     },
-                    "413": {
-                        "description": "Request body exceeds the 1 MiB limit",
-                        "schema": {
-                            "$ref": "#/definitions/api.errorResponse"
-                        }
-                    },
                     "429": {
                         "description": "GitHub rate limit exceeded",
                         "schema": {

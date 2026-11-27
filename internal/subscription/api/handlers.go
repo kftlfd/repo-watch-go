@@ -27,7 +27,6 @@ const (
 	errEmailMismatch        = "email does not match authenticated user"
 	errSubscriptionNotFound = "subscription not found"
 	errInternal             = "internal server error"
-	errBodyTooLarge         = "request body too large"
 	msgCheckEmail           = "check email to confirm subscription"
 	msgSubscribed           = "subscription active"
 	msgConfirmed            = "subscription confirmed"
@@ -54,7 +53,6 @@ func NotFound(c *gin.Context) {
 // @Failure      403  {object}  errorResponse    "Supplied email is invalid or does not match the authenticated user"
 // @Failure      404  {object}  errorResponse    "Repository not found on GitHub"
 // @Failure      409  {object}  errorResponse    "An active subscription already exists"
-// @Failure      413  {object}  errorResponse    "Request body exceeds the 1 MiB limit"
 // @Failure      429  {object}  errorResponse    "GitHub rate limit exceeded"
 // @Failure      500  {object}  errorResponse    "Internal server error"
 // @Failure      502  {object}  errorResponse    "GitHub upstream error"
@@ -62,10 +60,6 @@ func NotFound(c *gin.Context) {
 func (h *apiHandler) handleCreateSubscription(c *gin.Context) {
 	req := createSubscriptionRequest{}
 	if err := c.ShouldBind(&req); err != nil {
-		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			c.JSON(http.StatusRequestEntityTooLarge, errorResponse{Error: errBodyTooLarge})
-			return
-		}
 		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidInput})
 		return
 	}

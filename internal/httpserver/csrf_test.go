@@ -84,6 +84,17 @@ func TestNewCSRFDerivesSecureConfigFromBaseURL(t *testing.T) {
 	require.Equal(t, "__Host-rw_csrf", csrf.CookieName())
 	require.True(t, csrf.secure)
 	require.Equal(t, "https://example.test:443", csrf.appOrigin)
+	require.Equal(t, int64(defaultMaxBodyBytes), csrf.formMemory)
+}
+
+func TestNewCSRFUsesConfiguredFormMemory(t *testing.T) {
+	csrf, err := NewCSRF(CSRFConfig{
+		Secret:     []byte(strings.Repeat("s", 32)),
+		AppOrigin:  "https://example.test",
+		FormMemory: 64,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(64), csrf.formMemory)
 }
 
 func TestNewCSRFRejectsInvalidBaseURL(t *testing.T) {
@@ -231,6 +242,61 @@ func TestCSRFMiddlewareAcceptsFormField(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestCSRFMiddlewareMapsFormErrors(t *testing.T) {
+	for _, useHeader := range []bool{false, true} {
+		name := "body token"
+		if useHeader {
+			name = "header token"
+		}
+		t.Run(name+" oversized form", func(t *testing.T) {
+			csrf := testCSRF(t)
+			router := limitRequestBody(128, testCSRFRouter(csrf))
+
+			getRec := httptest.NewRecorder()
+			router.ServeHTTP(getRec, httptest.NewRequest(http.MethodGet, "/", nil))
+			cookie, token := csrfTokenFromResponse(t, getRec)
+
+			form := url.Values{"padding": {strings.Repeat("x", 256)}}.Encode()
+			if !useHeader {
+				form = url.Values{
+					CSRFFormField: {token},
+					"padding":     {strings.Repeat("x", 256)},
+				}.Encode()
+			}
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(form))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.AddCookie(cookie)
+			if useHeader {
+				req.Header.Set(CSRFHeader, token)
+			}
+
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusBadRequest, w.Code)
+			require.JSONEq(t, `{"error":"invalid form body"}`, w.Body.String())
+		})
+	}
+
+	t.Run("malformed form", func(t *testing.T) {
+		csrf := testCSRF(t)
+		router := testCSRFRouter(csrf)
+
+		getRec := httptest.NewRecorder()
+		router.ServeHTTP(getRec, httptest.NewRequest(http.MethodGet, "/", nil))
+		cookie, token := csrfTokenFromResponse(t, getRec)
+
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("csrf_token=%zz"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set(CSRFHeader, token)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		require.JSONEq(t, `{"error":"invalid form body"}`, w.Body.String())
+	})
 }
 
 func TestCSRFRotateChangesToken(t *testing.T) {

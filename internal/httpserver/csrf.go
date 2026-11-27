@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -28,6 +29,7 @@ const (
 	csrfContextKey    = "httpserver.csrf_token"
 	csrfTokenBytes    = 32
 	csrfInternalError = "internal server error"
+	csrfInvalidForm   = "invalid form body"
 )
 
 var (
@@ -43,6 +45,10 @@ type CSRFConfig struct {
 	BaseURL    string
 	Secure     bool
 	AppOrigin  string
+
+	// FormMemory is the maximum memory used to parse multipart forms. Non-positive
+	// values default to defaultMaxBodyBytes.
+	FormMemory int64
 }
 
 // CSRF issues and validates signed double-submit tokens.
@@ -51,12 +57,16 @@ type CSRF struct {
 	cookieName string
 	secure     bool
 	appOrigin  string
+	formMemory int64
 }
 
 // NewCSRF returns a CSRF token manager.
 func NewCSRF(cfg CSRFConfig) (*CSRF, error) {
 	if len(cfg.Secret) < 32 {
 		return nil, ErrWeakCSRFSecret
+	}
+	if cfg.FormMemory <= 0 {
+		cfg.FormMemory = defaultMaxBodyBytes
 	}
 	if cfg.BaseURL != "" {
 		u, err := url.Parse(cfg.BaseURL)
@@ -87,6 +97,7 @@ func NewCSRF(cfg CSRFConfig) (*CSRF, error) {
 		cookieName: cfg.CookieName,
 		secure:     cfg.Secure,
 		appOrigin:  appOrigin,
+		formMemory: cfg.FormMemory,
 	}, nil
 }
 
@@ -112,6 +123,21 @@ func (c *CSRF) Middleware() gin.HandlerFunc {
 
 		if !c.validRequestOrigin(ctx.Request) {
 			ctx.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": errInvalidCSRF.Error()})
+			return
+		}
+
+		// Gin's PostForm parses on demand but discards parsing errors. Parse
+		// explicitly so malformed/limited bodies return 400 instead of a
+		// misleading CSRF 403.
+		mediaType, _, _ := mime.ParseMediaType(ctx.GetHeader("Content-Type"))
+		var formErr error
+		if mediaType == "multipart/form-data" {
+			formErr = ctx.Request.ParseMultipartForm(c.formMemory)
+		} else {
+			formErr = ctx.Request.ParseForm()
+		}
+		if formErr != nil {
+			ctx.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": csrfInvalidForm})
 			return
 		}
 
