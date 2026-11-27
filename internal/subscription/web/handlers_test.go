@@ -186,7 +186,7 @@ func newTestRouterWithAuth(
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}, false))
+	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}, httpserver.ObservabilityConfig{}))
 	router.Use(httpserver.Recovery())
 
 	RegisterRoutes(router.Group("/"), Deps{

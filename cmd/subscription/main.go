@@ -204,7 +204,7 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 
 	router := gin.New()
 	router.Use(httpserver.SecurityHeaders())
-	router.Use(httpserver.ObservabilityMiddleware(httpLogger, httpMetrics, false))
+	router.Use(httpserver.ObservabilityMiddleware(httpLogger, httpMetrics, httpserver.ObservabilityConfig{}))
 	router.Use(httpserver.Recovery())
 
 	if err := api.RegisterRoutes(router.Group("/api"), api.Deps{

@@ -3,7 +3,6 @@ package httpserver
 import (
 	"errors"
 	"log/slog"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -20,12 +19,30 @@ const (
 	RequestIDHeader = "X-Request-ID"
 )
 
-func ObservabilityMiddleware(logger *slog.Logger, m Metrics, allowTraceparent bool) gin.HandlerFunc {
+// ObservabilityConfig controls request metadata accepted from clients and the
+// fixed query-key names that are safe to include in access logs.
+type ObservabilityConfig struct {
+	AllowTraceparent bool
+	AllowedQueryKeys []string
+}
+
+func ObservabilityMiddleware(logger *slog.Logger, m Metrics, cfg ObservabilityConfig) gin.HandlerFunc {
+	allowedQueryKeys := make(map[string]struct{}, len(cfg.AllowedQueryKeys))
+	for _, key := range cfg.AllowedQueryKeys {
+		allowedQueryKeys[key] = struct{}{}
+	}
+
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		start := time.Now()
 		route := c.FullPath()
-		queryKeys := slices.Sorted(maps.Keys(c.Request.URL.Query()))
+		var queryKeys []string
+		for key := range c.Request.URL.Query() {
+			if _, ok := allowedQueryKeys[key]; ok {
+				queryKeys = append(queryKeys, key)
+			}
+		}
+		slices.Sort(queryKeys)
 
 		requestID := observability.NormalizeCorrelationID(c.GetHeader(RequestIDHeader))
 		if requestID == "" {
@@ -34,7 +51,7 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics, allowTraceparent bo
 		c.Header(RequestIDHeader, requestID)
 		ctx = observability.WithCorrelationID(ctx, requestID)
 
-		if allowTraceparent {
+		if cfg.AllowTraceparent {
 			ctx = observability.WithTraceParent(ctx,
 				c.GetHeader(observability.TraceParentHeader),
 				c.GetHeader(observability.TraceStateHeader),

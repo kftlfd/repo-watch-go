@@ -34,7 +34,7 @@ func newTestRouter(t *testing.T, register func(*gin.Engine)) (*gin.Engine, *byte
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	router := gin.New()
-	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, false))
+	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, ObservabilityConfig{}))
 	router.Use(Recovery())
 	register(router)
 
@@ -132,6 +132,12 @@ func TestObservabilityMiddlewareRedactsQueryValuesAndPathParameters(t *testing.T
 		r.GET("/confirm/:token", func(c *gin.Context) {
 			c.Status(http.StatusOK)
 		})
+		r.GET("/unsubscribe/:token", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+		r.GET("/verify/:token", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
 		r.GET("/api/subscriptions", func(c *gin.Context) {
 			c.Status(http.StatusOK)
 		})
@@ -145,7 +151,10 @@ func TestObservabilityMiddlewareRedactsQueryValuesAndPathParameters(t *testing.T
 		status int
 	}{
 		{target: "/confirm/secret-confirm-token?email=alice%40example.com", status: http.StatusOK},
+		{target: "/unsubscribe/secret-unsubscribe-token?email=alice%40example.com", status: http.StatusOK},
+		{target: "/verify/secret-verify-token?email=alice%40example.com", status: http.StatusOK},
 		{target: "/api/subscriptions?email=alice%40example.com", status: http.StatusOK},
+		{target: "/api/subscriptions?alice%40example.com&secret-token", status: http.StatusOK},
 		{target: "/unmatched/secret-path-token?email=alice%40example.com", status: http.StatusNotFound},
 	}
 
@@ -157,12 +166,17 @@ func TestObservabilityMiddlewareRedactsQueryValuesAndPathParameters(t *testing.T
 
 	logOutput := logs.String()
 	require.NotContains(t, logOutput, "secret-confirm-token")
+	require.NotContains(t, logOutput, "secret-unsubscribe-token")
+	require.NotContains(t, logOutput, "secret-verify-token")
 	require.NotContains(t, logOutput, "secret-path-token")
+	require.NotContains(t, logOutput, "secret-token")
 	require.NotContains(t, logOutput, "alice@example.com")
 	require.Contains(t, logOutput, "path=/confirm/:token")
+	require.Contains(t, logOutput, "path=/unsubscribe/:token")
+	require.Contains(t, logOutput, "path=/verify/:token")
 	require.Contains(t, logOutput, "path=/api/subscriptions")
 	require.Contains(t, logOutput, "path=")
-	require.Contains(t, logOutput, "query_keys=email")
+	require.NotContains(t, logOutput, "query_keys=")
 
 	paths := make(map[string]string)
 	for _, span := range recorder.Ended() {
@@ -174,8 +188,33 @@ func TestObservabilityMiddlewareRedactsQueryValuesAndPathParameters(t *testing.T
 	}
 
 	require.Equal(t, "/confirm/:token", paths["HTTP GET /confirm/:token"])
+	require.Equal(t, "/unsubscribe/:token", paths["HTTP GET /unsubscribe/:token"])
+	require.Equal(t, "/verify/:token", paths["HTTP GET /verify/:token"])
 	require.Equal(t, "/api/subscriptions", paths["HTTP GET /api/subscriptions"])
 	require.Equal(t, "unmatched", paths["HTTP GET unmatched"])
+}
+
+func TestObservabilityMiddlewareLogsOnlyAllowedQueryKeys(t *testing.T) {
+	logs := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	router := gin.New()
+	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, ObservabilityConfig{
+		AllowedQueryKeys: []string{"page", "email"},
+	}))
+	router.GET("/filter", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	target := "/filter?email=alice%40example.com&page=2&alice%40example.com&access_token=secret-token"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, target, nil))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	logOutput := logs.String()
+	require.Contains(t, logOutput, "query_keys=email,page")
+	require.NotContains(t, logOutput, "alice@example.com")
+	require.NotContains(t, logOutput, "access_token")
+	require.NotContains(t, logOutput, "secret-token")
 }
 
 func TestRecoveryDoesNotDumpRequestSecrets(t *testing.T) {
@@ -192,7 +231,7 @@ func TestRecoveryDoesNotDumpRequestSecrets(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	router := gin.New()
-	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, false))
+	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, ObservabilityConfig{}))
 	router.Use(Recovery())
 	router.GET("/panic", func(*gin.Context) {
 		panic("boom")
