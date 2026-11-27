@@ -3,6 +3,9 @@ package httpserver
 import (
 	"errors"
 	"log/slog"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -21,8 +24,8 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics, allowTraceparent bo
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		start := time.Now()
-		path := c.FullPath()
-		query := c.Request.URL.RawQuery
+		route := c.FullPath()
+		queryKeys := slices.Sorted(maps.Keys(c.Request.URL.Query()))
 
 		requestID := observability.NormalizeCorrelationID(c.GetHeader(RequestIDHeader))
 		if requestID == "" {
@@ -39,18 +42,19 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics, allowTraceparent bo
 		}
 
 		spanName := "HTTP " + c.Request.Method
-		if path != "" {
-			spanName += " " + path
-		} else {
-			spanName += " unmatched"
-		}
 		spanAttrs := []attribute.KeyValue{
 			observability.Attr.HTTPRequestMethod(c.Request.Method),
-			observability.Attr.URLPath(c.Request.URL.Path),
 			observability.Attr.CorrelationID(requestID),
 		}
-		if path != "" {
-			spanAttrs = append(spanAttrs, observability.Attr.HTTPRoute(path))
+		if route != "" {
+			spanName += " " + route
+			spanAttrs = append(spanAttrs,
+				observability.Attr.URLPath(route),
+				observability.Attr.HTTPRoute(route),
+			)
+		} else {
+			spanName += " unmatched"
+			spanAttrs = append(spanAttrs, observability.Attr.URLPath("unmatched"))
 		}
 		ctx, span := observability.Tracer().Start(ctx, spanName,
 			trace.WithSpanKind(trace.SpanKindServer),
@@ -74,12 +78,14 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics, allowTraceparent bo
 			slog.String("request_id", requestID),
 			slog.String("correlation_id", requestID),
 			slog.String("method", c.Request.Method),
-			slog.String("path", path),
-			slog.String("query", query),
+			slog.String("path", route),
 			slog.Int("status", status),
 			slog.String("latency", duration.String()),
 			// slog.String("client_ip", c.ClientIP()),
 			// slog.Int("body_size", c.Writer.Size()),
+		}
+		if len(queryKeys) > 0 {
+			attrs = append(attrs, slog.String("query_keys", strings.Join(queryKeys, ",")))
 		}
 
 		hasError := len(c.Errors) > 0
@@ -99,7 +105,7 @@ func ObservabilityMiddleware(logger *slog.Logger, m Metrics, allowTraceparent bo
 
 		attrs = append(attrs, observability.TraceLogAttrs(ctx)...)
 
-		m.HTTPRequest(c.Request.Method, path, status, duration)
+		m.HTTPRequest(c.Request.Method, route, status, duration)
 
 		switch {
 		case hasError || status >= 500:
