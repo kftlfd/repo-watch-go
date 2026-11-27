@@ -76,7 +76,7 @@ CREATE INDEX user_tokens_created_at_idx ON user_tokens (created_at);
 
 CREATE TABLE subscription_tokens (
     id SERIAL PRIMARY KEY,
-    subscription_id INTEGER NOT NULL REFERENCES subscriptions (id),
+    subscription_id INTEGER NOT NULL REFERENCES subscriptions (id) ON DELETE CASCADE,
     token_type TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
