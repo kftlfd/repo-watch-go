@@ -206,11 +206,13 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	router.Use(httpserver.ObservabilityMiddleware(httpLogger, httpMetrics, false))
 	router.Use(httpserver.Recovery())
 
-	api.RegisterRoutes(router.Group("/api"), api.Deps{
+	if err := api.RegisterRoutes(router.Group("/api"), api.Deps{
 		SubsService: subsSvc,
 		AuthService: authSvc,
 		DocsHost:    cfg.APIHost,
-	})
+	}); err != nil {
+		return fmt.Errorf("register api routes: %w", err)
+	}
 	web.RegisterRoutes(router.Group("/"), web.Deps{
 		SubsService: subsSvc,
 		AuthService: authSvc,

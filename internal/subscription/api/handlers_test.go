@@ -98,10 +98,10 @@ func newTestHandlerWithAuth(t *testing.T, svc subsService, authSvc authService) 
 	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}, false))
 	router.Use(httpserver.Recovery())
 
-	RegisterRoutes(router.Group("/api"), Deps{
+	require.NoError(t, RegisterRoutes(router.Group("/api"), Deps{
 		SubsService: svc,
 		AuthService: authSvc,
-	})
+	}))
 	router.NoRoute(NotFound)
 
 	return router, logs

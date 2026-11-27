@@ -3,12 +3,12 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
 	"repo-watch/internal/httpserver"
-	"repo-watch/internal/subscription/api/docs"
 	"repo-watch/internal/subscription/auth"
 	"repo-watch/internal/subscription/identity"
 )
@@ -43,16 +43,22 @@ type apiHandler struct {
 	authService authService
 }
 
-func RegisterRoutes(rg *gin.RouterGroup, d Deps) {
-	docs.SwaggerInfo.Host = d.DocsHost
+func RegisterRoutes(rg *gin.RouterGroup, d Deps) error {
+	docsPath := "/docs"
+	specPath := "/docs/openapi.json"
+	docs, err := newDocsHandler(d.DocsHost, rg.BasePath()+specPath)
+	if err != nil {
+		return fmt.Errorf("create docs handler: %w", err)
+	}
+	rg.GET(docsPath, docs.serveScalarDocs)
+	rg.HEAD(docsPath, docs.serveScalarDocs)
+	rg.GET(specPath, docs.serveOpenAPISpec)
+	rg.HEAD(specPath, docs.serveOpenAPISpec)
 
 	h := &apiHandler{
 		subsService: d.SubsService,
 		authService: d.AuthService,
 	}
-
-	rg.GET("/docs", serveScalarDocs)
-	rg.GET("/docs/openapi.json", serveOpenAPISpec)
 
 	subsRoutes := rg.Group("", noStore)
 	subsRoutes.POST("/subscribe", auth.OptionalBearerAuth(d.AuthService, handleAuthError), h.handleCreateSubscription)
@@ -71,6 +77,8 @@ func RegisterRoutes(rg *gin.RouterGroup, d Deps) {
 	authRoutes.POST("/refresh", h.handleRefresh)
 	authRoutes.POST("/logout", h.handleLogout)
 	authRoutes.GET("/me", auth.BearerAuth(d.AuthService, handleAuthError), h.handleMe)
+
+	return nil
 }
 
 // handleAuthError maps authentication middleware failures to API responses.
