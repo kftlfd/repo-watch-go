@@ -15,6 +15,15 @@ FROM users
 WHERE email = $1
 FOR UPDATE;
 
+-- name: UpdateUnverifiedUserPasswordHash :one
+UPDATE users
+SET
+    password_hash = $2,
+    updated_at = now()
+WHERE email = $1
+    AND email_verified_at IS NULL
+RETURNING *;
+
 -- name: MarkUserEmailVerified :one
 UPDATE users
 SET

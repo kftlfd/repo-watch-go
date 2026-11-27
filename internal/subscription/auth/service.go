@@ -201,9 +201,9 @@ func (s *Service) CreateSession(ctx context.Context, email identity.Email) (Toke
 }
 
 // Signup creates an unverified user and queues a verification email. Existing
-// unverified users get a rotated token and a new email. Existing verified
-// users are left alone; callers must return the same generic response for
-// every case.
+// unverified users get an updated password, a rotated token, and a new email.
+// Existing verified users are left alone; callers must return the same generic
+// response for every case.
 func (s *Service) Signup(ctx context.Context, email identity.Email, password string) error {
 	if err := s.validatePasswordLength(password); err != nil {
 		return err
@@ -238,6 +238,12 @@ func (s *Service) Signup(ctx context.Context, email identity.Email, password str
 		}
 		if user.EmailVerifiedAt.Valid {
 			return nil
+		}
+		if _, err = qtx.UpdateUnverifiedUserPasswordHash(ctx, dbGen.UpdateUnverifiedUserPasswordHashParams{
+			Email:        email.String(),
+			PasswordHash: passwordHash,
+		}); err != nil {
+			return fmt.Errorf("update unverified user password: %w", err)
 		}
 	default:
 		return fmt.Errorf("create user: %w", err)

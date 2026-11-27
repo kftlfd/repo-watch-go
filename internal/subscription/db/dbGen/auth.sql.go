@@ -448,6 +448,34 @@ func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) (Ses
 	return i, err
 }
 
+const updateUnverifiedUserPasswordHash = `-- name: UpdateUnverifiedUserPasswordHash :one
+UPDATE users
+SET
+    password_hash = $2,
+    updated_at = now()
+WHERE email = $1
+    AND email_verified_at IS NULL
+RETURNING email, password_hash, email_verified_at, created_at, updated_at
+`
+
+type UpdateUnverifiedUserPasswordHashParams struct {
+	Email        string
+	PasswordHash string
+}
+
+func (q *Queries) UpdateUnverifiedUserPasswordHash(ctx context.Context, arg UpdateUnverifiedUserPasswordHashParams) (User, error) {
+	row := q.db.QueryRowContext(ctx, updateUnverifiedUserPasswordHash, arg.Email, arg.PasswordHash)
+	var i User
+	err := row.Scan(
+		&i.Email,
+		&i.PasswordHash,
+		&i.EmailVerifiedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertUserToken = `-- name: UpsertUserToken :one
 INSERT INTO user_tokens (user_email, token_type, token_hash)
 VALUES ($1, $2, $3)

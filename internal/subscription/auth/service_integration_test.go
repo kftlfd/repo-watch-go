@@ -156,12 +156,13 @@ func TestSignupIsGenericForExistingAccountsAndResendRotates(t *testing.T) {
 	svc, queries := newAuthService(t)
 	ctx := context.Background()
 	email := mustEmail(t, "alice@example.com")
-	const password = "correct horse battery staple"
+	const firstPassword = "correct horse battery staple"
+	const secondPassword = "another valid password"
 
-	require.NoError(t, svc.Signup(ctx, email, password))
+	require.NoError(t, svc.Signup(ctx, email, firstPassword))
 	firstToken := latestVerificationToken(t, queries)
 
-	require.NoError(t, svc.Signup(ctx, email, "another valid password"))
+	require.NoError(t, svc.Signup(ctx, email, secondPassword))
 	secondToken := latestVerificationToken(t, queries)
 	require.NotEqual(t, firstToken, secondToken)
 
@@ -173,11 +174,16 @@ func TestSignupIsGenericForExistingAccountsAndResendRotates(t *testing.T) {
 	require.ErrorIs(t, svc.VerifyEmail(ctx, secondToken), auth.ErrInvalidToken)
 
 	// Duplicate signup does not change the password of a verified account.
-	require.NoError(t, svc.Signup(ctx, email, "another valid password"))
-	_, err := svc.Login(ctx, email, password)
+	require.NoError(t, svc.Signup(ctx, email, "verified-account-password-attempt"))
+	_, err := svc.Login(ctx, email, secondPassword)
 	require.NoError(t, err)
 
-	_, err = svc.Login(ctx, mustEmail(t, "missing@example.com"), password)
+	_, err = svc.Login(ctx, email, firstPassword)
+	require.ErrorIs(t, err, auth.ErrInvalidCredentials)
+	_, err = svc.Login(ctx, email, "verified-account-password-attempt")
+	require.ErrorIs(t, err, auth.ErrInvalidCredentials)
+
+	_, err = svc.Login(ctx, mustEmail(t, "missing@example.com"), firstPassword)
 	require.ErrorIs(t, err, auth.ErrInvalidCredentials)
 }
 
