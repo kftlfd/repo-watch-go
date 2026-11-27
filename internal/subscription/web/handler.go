@@ -85,6 +85,7 @@ func RegisterRoutes(rg *gin.RouterGroup, d Deps) {
 
 	static := rg.Group("/static")
 	static.GET("/*filepath", h.handleStatic)
+	static.HEAD("/*filepath", h.handleStatic)
 }
 
 func noStore(c *gin.Context) {

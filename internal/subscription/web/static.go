@@ -19,6 +19,10 @@ var staticFS embed.FS
 
 var staticFiles = newStaticCache(mustSubFS(staticFS, "static"))
 
+// staticCache caches only ETags, not file contents. Embedded files are
+// immutable for the lifetime of the process, so the cached hash always
+// describes the bytes served on later requests without keeping a second copy of
+// every file in memory.
 type staticCache struct {
 	fs    fs.FS
 	mu    sync.RWMutex
@@ -95,7 +99,7 @@ func (h *webHandler) handleStatic(c *gin.Context) {
 
 	content, ok := f.(io.ReadSeeker)
 	if !ok {
-		c.Status(http.StatusInternalServerError)
+		staticInternalError(c)
 		return
 	}
 
@@ -109,4 +113,9 @@ func (h *webHandler) handleStatic(c *gin.Context) {
 func staticNotFound(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	c.Status(http.StatusNotFound)
+}
+
+func staticInternalError(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.Status(http.StatusInternalServerError)
 }
