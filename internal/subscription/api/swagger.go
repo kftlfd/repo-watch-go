@@ -39,6 +39,11 @@ import (
 const (
 	scalarDocsContentType  = "text/html; charset=utf-8"
 	openAPISpecContentType = "application/json; charset=utf-8"
+
+	// docsContentSecurityPolicy allows the pinned Scalar bundle, its inline
+	// bootstrap, and the same-origin OpenAPI document while keeping the rest of
+	// the policy strict.
+	docsContentSecurityPolicy = "default-src 'none'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data: https://cdn.jsdelivr.net; font-src https://cdn.jsdelivr.net data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 )
 
 const scalarDocsHTML = `<!doctype html>
@@ -95,6 +100,7 @@ func newDocsHandler(docsHost, specPath string) (*docsHandler, error) {
 }
 
 func (h *docsHandler) serveScalarDocs(c *gin.Context) {
+	c.Header("Content-Security-Policy", docsContentSecurityPolicy)
 	h.serve(c, "docs.html", scalarDocsContentType, h.scalarDocs, h.scalarDocsETag)
 }
 

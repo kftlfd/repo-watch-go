@@ -7,6 +7,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"repo-watch/internal/httpserver"
 )
 
 type Deps struct {
@@ -19,6 +21,7 @@ type Deps struct {
 
 func NewHandler(d Deps) http.Handler {
 	g := gin.New()
+	g.Use(httpserver.SecurityHeaders())
 	g.Use(gin.Recovery())
 
 	g.GET("/health", func(c *gin.Context) {
