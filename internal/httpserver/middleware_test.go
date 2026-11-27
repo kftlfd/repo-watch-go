@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -12,6 +13,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 
 	"repo-watch/internal/observability"
 )
@@ -19,6 +24,14 @@ import (
 type fakeMetrics struct{}
 
 func (fakeMetrics) HTTPRequest(string, string, int, time.Duration) {}
+
+type recordingMetrics struct {
+	route string
+}
+
+func (m *recordingMetrics) HTTPRequest(_ string, route string, _ int, _ time.Duration) {
+	m.route = route
+}
 
 func newTestRouter(t *testing.T, register func(*gin.Engine)) (*gin.Engine, *bytes.Buffer) {
 	t.Helper()
@@ -29,7 +42,7 @@ func newTestRouter(t *testing.T, register func(*gin.Engine)) (*gin.Engine, *byte
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	router := gin.New()
-	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, false))
+	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, ObservabilityConfig{}))
 	router.Use(Recovery())
 	register(router)
 
@@ -90,6 +103,25 @@ func TestObservabilityMiddlewareLogsClientErrorAsWarning(t *testing.T) {
 	require.NotContains(t, logs.String(), "request failed")
 }
 
+func TestObservabilityMiddlewareUsesUnmatchedRouteLabel(t *testing.T) {
+	logs := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	metrics := &recordingMetrics{}
+	router := gin.New()
+	router.Use(ObservabilityMiddleware(logger, metrics, ObservabilityConfig{}))
+	router.NoRoute(func(c *gin.Context) {
+		c.Status(http.StatusNotFound)
+	})
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/missing/secret-token", nil))
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+	require.Equal(t, "unmatched", metrics.route)
+	require.Contains(t, logs.String(), "path=unmatched")
+	require.NotContains(t, logs.String(), "secret-token")
+}
+
 func TestRecoveryRecordsPanic(t *testing.T) {
 	originalWriter := gin.DefaultErrorWriter
 	gin.DefaultErrorWriter = io.Discard
@@ -107,5 +139,139 @@ func TestRecoveryRecordsPanic(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 	require.Contains(t, logs.String(), "level=ERROR")
 	require.Contains(t, logs.String(), "operation=panic")
-	require.Contains(t, logs.String(), "boom")
+	require.Contains(t, logs.String(), "error=")
+}
+
+func TestObservabilityMiddlewareRedactsQueryValuesAndPathParameters(t *testing.T) {
+	previousProvider := otel.GetTracerProvider()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSpanProcessor(recorder),
+	)
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previousProvider)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	router, logs := newTestRouter(t, func(r *gin.Engine) {
+		r.GET("/confirm/:token", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+		r.GET("/unsubscribe/:token", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+		r.GET("/verify/:token", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+		r.GET("/api/subscriptions", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+		r.NoRoute(func(c *gin.Context) {
+			c.Status(http.StatusNotFound)
+		})
+	})
+
+	requests := []struct {
+		target string
+		status int
+	}{
+		{target: "/confirm/secret-confirm-token?email=alice%40example.com", status: http.StatusOK},
+		{target: "/unsubscribe/secret-unsubscribe-token?email=alice%40example.com", status: http.StatusOK},
+		{target: "/verify/secret-verify-token?email=alice%40example.com", status: http.StatusOK},
+		{target: "/api/subscriptions?email=alice%40example.com", status: http.StatusOK},
+		{target: "/api/subscriptions?alice%40example.com&secret-token", status: http.StatusOK},
+		{target: "/unmatched/secret-path-token?email=alice%40example.com", status: http.StatusNotFound},
+	}
+
+	for _, request := range requests {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, request.target, nil))
+		require.Equal(t, request.status, w.Code)
+	}
+
+	logOutput := logs.String()
+	require.NotContains(t, logOutput, "secret-confirm-token")
+	require.NotContains(t, logOutput, "secret-unsubscribe-token")
+	require.NotContains(t, logOutput, "secret-verify-token")
+	require.NotContains(t, logOutput, "secret-path-token")
+	require.NotContains(t, logOutput, "secret-token")
+	require.NotContains(t, logOutput, "alice@example.com")
+	require.Contains(t, logOutput, "path=/confirm/:token")
+	require.Contains(t, logOutput, "path=/unsubscribe/:token")
+	require.Contains(t, logOutput, "path=/verify/:token")
+	require.Contains(t, logOutput, "path=/api/subscriptions")
+	require.Contains(t, logOutput, "path=")
+	require.NotContains(t, logOutput, "query_keys=")
+
+	paths := make(map[string]string)
+	for _, span := range recorder.Ended() {
+		for _, attr := range span.Attributes() {
+			if attr.Key == semconv.URLPathKey {
+				paths[span.Name()] = attr.Value.AsString()
+			}
+		}
+	}
+
+	require.Equal(t, "/confirm/:token", paths["HTTP GET /confirm/:token"])
+	require.Equal(t, "/unsubscribe/:token", paths["HTTP GET /unsubscribe/:token"])
+	require.Equal(t, "/verify/:token", paths["HTTP GET /verify/:token"])
+	require.Equal(t, "/api/subscriptions", paths["HTTP GET /api/subscriptions"])
+	require.Equal(t, "unmatched", paths["HTTP GET unmatched"])
+}
+
+func TestObservabilityMiddlewareLogsOnlyAllowedQueryKeys(t *testing.T) {
+	logs := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	router := gin.New()
+	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, ObservabilityConfig{
+		AllowedQueryKeys: []string{"page", "email"},
+	}))
+	router.GET("/filter", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	target := "/filter?email=alice%40example.com&page=2&alice%40example.com&access_token=secret-token"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, target, nil))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	logOutput := logs.String()
+	require.Contains(t, logOutput, "query_keys=email,page")
+	require.NotContains(t, logOutput, "alice@example.com")
+	require.NotContains(t, logOutput, "access_token")
+	require.NotContains(t, logOutput, "secret-token")
+}
+
+func TestRecoveryDoesNotDumpRequestSecrets(t *testing.T) {
+	originalWriter := gin.DefaultErrorWriter
+	originalMode := gin.Mode()
+	gin.DefaultErrorWriter = io.Discard
+	gin.SetMode(gin.DebugMode)
+	t.Cleanup(func() {
+		gin.DefaultErrorWriter = originalWriter
+		gin.SetMode(originalMode)
+	})
+
+	logs := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	router := gin.New()
+	router.Use(ObservabilityMiddleware(logger, fakeMetrics{}, ObservabilityConfig{}))
+	router.Use(Recovery())
+	router.GET("/panic", func(*gin.Context) {
+		panic("boom")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/panic?email=alice%40example.com", nil)
+	req.AddCookie(&http.Cookie{Name: "rw_access", Value: "secret-cookie"})
+	req.Header.Set("Authorization", "Bearer secret-token")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.NotContains(t, logs.String(), "alice@example.com")
+	require.NotContains(t, logs.String(), "secret-cookie")
+	require.NotContains(t, logs.String(), "secret-token")
 }

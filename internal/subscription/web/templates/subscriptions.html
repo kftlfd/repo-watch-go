@@ -1,0 +1,22 @@
+{{define "subscriptions.html"}}{{template "head" .}}
+      <h1>Subscriptions</h1>
+      {{if .Message}}<p role="status">{{.Message}}</p>{{end}}
+      {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+      {{if .Subscriptions}}
+        <ul class="subscriptions">
+          {{range .Subscriptions}}
+            <li>
+              <span>{{.}}</span>
+              <form class="inline-form" method="post" action="/subscriptions/unsubscribe">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}" />
+                <input type="hidden" name="repo" value="{{.}}" />
+                <button class="link-button" type="submit">Unsubscribe</button>
+              </form>
+            </li>
+          {{end}}
+        </ul>
+      {{else}}
+        <p>You do not have any active subscriptions.</p>
+      {{end}}
+      <p><a href="/">Subscribe to a repository</a></p>
+{{template "foot" .}}{{end}}

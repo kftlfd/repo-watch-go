@@ -1,5 +1,11 @@
 package emails
 
+const EmailVerifyAccount = "verify-account"
+
+type EmailVerifyAccountData struct {
+	VerifyToken string `json:"verify_token"`
+}
+
 const EmailConfirmSubscription = "confirm-sub"
 
 type EmailConfirmSubscriptionData struct {

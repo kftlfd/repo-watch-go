@@ -1,0 +1,17 @@
+{{define "signup.html"}}{{template "head" .}}
+      <h1>Sign up</h1>
+      {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+      <form method="post" action="/signup">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}" />
+        <label>
+          Email
+          <input type="email" name="email" value="{{.Email}}" autocomplete="email" required />
+        </label>
+        <label>
+          Password
+          <input type="password" name="password" autocomplete="new-password" required />
+        </label>
+        <button type="submit">Sign up</button>
+      </form>
+      <p>Already have an account? <a href="/login">Log in</a>.</p>
+{{template "foot" .}}{{end}}

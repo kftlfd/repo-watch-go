@@ -19,25 +19,31 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"repo-watch/internal/httpserver"
+	"repo-watch/internal/subscription/identity"
 	"repo-watch/internal/subscription/subs"
 )
 
 type fakeSubsService struct {
-	createErr       error
-	createEmail     string
-	createRepo      string
-	confirmErr      error
-	confirmToken    string
-	deactivateErr   error
-	deactivateToken string
-	listEmail       string
-	listRepos       []string
-	listErr         error
+	createErr         error
+	createEmail       string
+	createRepo        string
+	createVerified    bool
+	confirmErr        error
+	confirmToken      string
+	deactivateErr     error
+	deactivateToken   string
+	deactivateRepo    string
+	deactivateEmail   string
+	deactivateRepoErr error
+	listEmail         string
+	listRepos         []string
+	listErr           error
 }
 
-func (f *fakeSubsService) CreateSubscription(_ context.Context, email, repo string) error {
-	f.createEmail = email
+func (f *fakeSubsService) CreateSubscription(_ context.Context, email identity.Email, repo string, verified bool) error {
+	f.createEmail = email.String()
 	f.createRepo = repo
+	f.createVerified = verified
 	return f.createErr
 }
 
@@ -51,8 +57,14 @@ func (f *fakeSubsService) DeactivateSubscription(_ context.Context, token string
 	return f.deactivateErr
 }
 
-func (f *fakeSubsService) GetSubscriptionsList(_ context.Context, email string) ([]string, error) {
-	f.listEmail = email
+func (f *fakeSubsService) DeactivateSubscriptionByRepo(_ context.Context, email identity.Email, repo string) error {
+	f.deactivateEmail = email.String()
+	f.deactivateRepo = repo
+	return f.deactivateRepoErr
+}
+
+func (f *fakeSubsService) GetSubscriptionsList(_ context.Context, email identity.Email) ([]string, error) {
+	f.listEmail = email.String()
 	return f.listRepos, f.listErr
 }
 
@@ -63,18 +75,34 @@ func (fakeMetrics) HTTPRequest(string, string, int, time.Duration) {}
 func newTestHandler(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer) {
 	t.Helper()
 
+	return newTestHandlerWithAuth(t, svc, nil)
+}
+
+func newAuthenticatedTestHandler(t *testing.T, svc subsService) (http.Handler, *bytes.Buffer) {
+	t.Helper()
+
+	return newTestHandlerWithAuth(t, svc, &fakeAuthService{
+		authenticated: authSessionFor("alice@example.com"),
+	})
+}
+
+func newTestHandlerWithAuth(t *testing.T, svc subsService, authSvc authService) (http.Handler, *bytes.Buffer) {
+	t.Helper()
+
 	gin.SetMode(gin.TestMode)
 
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	router := gin.New()
-	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}, false))
+	router.Use(httpserver.SecurityHeaders())
+	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}, httpserver.ObservabilityConfig{}))
 	router.Use(httpserver.Recovery())
 
-	RegisterRoutes(router.Group("/api"), Deps{
+	require.NoError(t, RegisterRoutes(router.Group("/api"), Deps{
 		SubsService: svc,
-	})
+		AuthService: authSvc,
+	}))
 	router.NoRoute(NotFound)
 
 	return router, logs
@@ -89,6 +117,26 @@ func doRequest(t *testing.T, h http.Handler, method, target, contentType, body s
 	}
 
 	req := httptest.NewRequest(method, target, reader)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	return w
+}
+
+func doAuthenticatedRequest(t *testing.T, h http.Handler, method, target, contentType, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req := httptest.NewRequest(method, target, reader)
+	req.Header.Set("Authorization", "Bearer access-token")
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -142,6 +190,7 @@ func TestSubscribeAcceptsFormAndJSON(t *testing.T) {
 			require.Equal(t, http.StatusOK, w.Code)
 			require.Equal(t, "alice@example.com", svc.createEmail)
 			require.Equal(t, "golang/go", svc.createRepo)
+			require.False(t, svc.createVerified)
 
 			var resp struct {
 				Message string `json:"message"`
@@ -265,6 +314,158 @@ func TestSubscribeHidesInternalErrors(t *testing.T) {
 	require.Contains(t, logs.String(), "path=/api/subscribe")
 }
 
+func TestSubscribeAuthenticatedUsesSessionEmailAndActivatesImmediately(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "email omitted",
+			body: `{"repo":"golang/go"}`,
+		},
+		{
+			name: "matching email supplied",
+			body: `{"email":"ALICE@example.com","repo":"golang/go"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeSubsService{}
+			h, _ := newTestHandlerWithAuth(t, svc, &fakeAuthService{
+				authenticated: authSessionFor("alice@example.com"),
+			})
+
+			w := doAuthenticatedRequest(t, h, http.MethodPost, "/api/subscribe", "application/json", tt.body)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, "alice@example.com", svc.createEmail)
+			require.Equal(t, "golang/go", svc.createRepo)
+			require.True(t, svc.createVerified)
+
+			var resp struct {
+				Message string `json:"message"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			require.Equal(t, msgSubscribed, resp.Message)
+		})
+	}
+}
+
+func TestSubscribeAuthenticatedRejectsDifferentOrInvalidEmail(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "different email",
+			body: `{"email":"bob@example.com","repo":"golang/go"}`,
+		},
+		{
+			name: "invalid email",
+			body: `{"email":"not-an-email","repo":"golang/go"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeSubsService{}
+			h, _ := newTestHandlerWithAuth(t, svc, &fakeAuthService{
+				authenticated: authSessionFor("alice@example.com"),
+			})
+
+			w := doAuthenticatedRequest(t, h, http.MethodPost, "/api/subscribe", "application/json", tt.body)
+
+			require.Equal(t, http.StatusForbidden, w.Code)
+			require.Equal(t, errEmailMismatch, decodeError(t, w))
+			require.Empty(t, svc.createEmail)
+		})
+	}
+}
+
+func TestSubscribeAnonymousRequiresEmail(t *testing.T) {
+	svc := &fakeSubsService{}
+	h, _ := newTestHandler(t, svc)
+
+	w := doRequest(t, h, http.MethodPost, "/api/subscribe", "application/json",
+		`{"repo":"golang/go"}`)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Equal(t, errInvalidInput, decodeError(t, w))
+	require.Empty(t, svc.createEmail)
+}
+
+func TestUnsubscribeByRepoRequiresBearer(t *testing.T) {
+	svc := &fakeSubsService{}
+	h, _ := newTestHandler(t, svc)
+
+	w := doRequest(t, h, http.MethodPost, "/api/subscriptions/unsubscribe",
+		"application/json", `{"repo":"golang/go"}`)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.Equal(t, "Bearer", w.Header().Get("WWW-Authenticate"))
+	require.Empty(t, svc.deactivateRepo)
+}
+
+func TestUnsubscribeByRepoUsesSessionEmail(t *testing.T) {
+	svc := &fakeSubsService{}
+	h, _ := newAuthenticatedTestHandler(t, svc)
+
+	w := doAuthenticatedRequest(t, h, http.MethodPost, "/api/subscriptions/unsubscribe",
+		"application/json", `{"repo":"golang/go"}`)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "alice@example.com", svc.deactivateEmail)
+	require.Equal(t, "golang/go", svc.deactivateRepo)
+
+	var resp struct {
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, msgUnsubscribed, resp.Message)
+}
+
+func TestUnsubscribeByRepoMapsErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantError  string
+	}{
+		{
+			name:       "invalid input",
+			err:        subs.ErrInvalidInput,
+			wantStatus: http.StatusBadRequest,
+			wantError:  errInvalidInput,
+		},
+		{
+			name:       "not found",
+			err:        sql.ErrNoRows,
+			wantStatus: http.StatusNotFound,
+			wantError:  errSubscriptionNotFound,
+		},
+		{
+			name:       "already inactive",
+			err:        subs.ErrSubscriptionAlreadyInactive,
+			wantStatus: http.StatusConflict,
+			wantError:  errAlreadyUnsubscribed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeSubsService{deactivateRepoErr: tt.err}
+			h, _ := newAuthenticatedTestHandler(t, svc)
+
+			w := doAuthenticatedRequest(t, h, http.MethodPost, "/api/subscriptions/unsubscribe",
+				"application/json", `{"repo":"golang/go"}`)
+
+			require.Equal(t, tt.wantStatus, w.Code)
+			require.Equal(t, tt.wantError, decodeError(t, w))
+		})
+	}
+}
+
 func TestTokenEndpointsSupportGetAndPost(t *testing.T) {
 	const token = "AAAAAAAAAAAAAAAAAAAAAA"
 
@@ -368,51 +569,38 @@ func TestTokenEndpointsMapErrors(t *testing.T) {
 	})
 }
 
-func TestListSubscriptionsValidatesEmail(t *testing.T) {
-	tests := []struct {
-		name   string
-		target string
-	}{
-		{name: "missing", target: "/api/subscriptions"},
-		{name: "invalid", target: "/api/subscriptions?email=not-an-email"},
-		{name: "blank", target: "/api/subscriptions?email=" + url.QueryEscape("   ")},
-		{name: "display name", target: "/api/subscriptions?email=" + url.QueryEscape("Alice <alice@example.com>")},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			svc := &fakeSubsService{}
-			h, _ := newTestHandler(t, svc)
-
-			w := doRequest(t, h, http.MethodGet, tt.target, "", "")
-
-			require.Equal(t, http.StatusBadRequest, w.Code)
-			require.Equal(t, errInvalidEmail, decodeError(t, w))
-			require.Empty(t, svc.listEmail)
-		})
-	}
-}
-
-func TestListSubscriptionsNormalizesEmail(t *testing.T) {
-	svc := &fakeSubsService{listRepos: []string{"golang/go"}}
+func TestListSubscriptionsRequiresBearer(t *testing.T) {
+	svc := &fakeSubsService{}
 	h, _ := newTestHandler(t, svc)
 
-	w := doRequest(t, h, http.MethodGet,
-		"/api/subscriptions?email="+url.QueryEscape("ALICE@Example.COM"), "", "")
+	w := doRequest(t, h, http.MethodGet, "/api/subscriptions", "", "")
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.Equal(t, "Bearer", w.Header().Get("WWW-Authenticate"))
+	require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+	require.Empty(t, svc.listEmail)
+}
+
+func TestListSubscriptionsUsesSessionEmail(t *testing.T) {
+	svc := &fakeSubsService{listRepos: []string{"golang/go"}}
+	h, _ := newAuthenticatedTestHandler(t, svc)
+
+	w := doRequestWithHeader(t, h, http.MethodGet, "/api/subscriptions", "Authorization", "Bearer access-token")
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "alice@example.com", svc.listEmail)
 
 	var resp []map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Equal(t, "alice@example.com", resp[0]["email"])
+	require.Equal(t, "golang/go", resp[0]["repo"])
+	require.NotContains(t, resp[0], "email")
 }
 
 func TestListSubscriptionsResponseShape(t *testing.T) {
 	svc := &fakeSubsService{listRepos: []string{"golang/go", "owner/repository"}}
-	h, _ := newTestHandler(t, svc)
+	h, _ := newAuthenticatedTestHandler(t, svc)
 
-	w := doRequest(t, h, http.MethodGet, "/api/subscriptions?email=alice@example.com", "", "")
+	w := doRequestWithHeader(t, h, http.MethodGet, "/api/subscriptions", "Authorization", "Bearer access-token")
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "alice@example.com", svc.listEmail)
@@ -423,7 +611,6 @@ func TestListSubscriptionsResponseShape(t *testing.T) {
 
 	for i, repo := range []string{"golang/go", "owner/repository"} {
 		require.Equal(t, map[string]any{
-			"email":     "alice@example.com",
 			"repo":      repo,
 			"confirmed": true,
 		}, resp[i])
@@ -434,9 +621,9 @@ func TestListSubscriptionsResponseShape(t *testing.T) {
 
 func TestListSubscriptionsEmptyResultIsArray(t *testing.T) {
 	svc := &fakeSubsService{}
-	h, _ := newTestHandler(t, svc)
+	h, _ := newAuthenticatedTestHandler(t, svc)
 
-	w := doRequest(t, h, http.MethodGet, "/api/subscriptions?email=alice@example.com", "", "")
+	w := doRequestWithHeader(t, h, http.MethodGet, "/api/subscriptions", "Authorization", "Bearer access-token")
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.JSONEq(t, `[]`, w.Body.String())
@@ -444,12 +631,26 @@ func TestListSubscriptionsEmptyResultIsArray(t *testing.T) {
 
 func TestListSubscriptionsHidesInternalErrors(t *testing.T) {
 	svc := &fakeSubsService{listErr: errors.New("secret list failure")}
-	h, logs := newTestHandler(t, svc)
+	h, logs := newAuthenticatedTestHandler(t, svc)
 
-	w := doRequest(t, h, http.MethodGet, "/api/subscriptions?email=alice@example.com", "", "")
+	w := doRequestWithHeader(t, h, http.MethodGet, "/api/subscriptions", "Authorization", "Bearer access-token")
 
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 	require.Equal(t, errInternal, decodeError(t, w))
 	require.NotContains(t, w.Body.String(), "secret list failure")
 	require.Contains(t, logs.String(), "secret list failure")
+}
+
+func TestProtectedHandlerWithoutSessionIsInternalError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := &apiHandler{subsService: &fakeSubsService{}}
+	router := gin.New()
+	router.GET("/subscriptions", h.handleListSubscriptions)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/subscriptions", nil))
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.Contains(t, w.Body.String(), errInternal)
 }

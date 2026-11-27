@@ -22,6 +22,7 @@ import (
 	"repo-watch/internal/postgres"
 	"repo-watch/internal/rabbitmq"
 	"repo-watch/internal/subscription/api"
+	"repo-watch/internal/subscription/auth"
 	"repo-watch/internal/subscription/cleanup"
 	"repo-watch/internal/subscription/db/dbGen"
 	"repo-watch/internal/subscription/db/migrations"
@@ -139,6 +140,25 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 		Queries:      queries,
 	})
 
+	authSvc, err := auth.NewService(auth.Deps{
+		DB:      db,
+		Queries: queries,
+		Config: auth.Config{
+			JWTSecret:  cfg.JWTSecret,
+			AccessTTL:  cfg.AccessTokenTTL,
+			RefreshTTL: cfg.RefreshTokenTTL,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create auth service: %w", err)
+	}
+
+	cookies := auth.NewCookieManager(auth.CookieConfig{BaseURL: cfg.AppBaseURL})
+	csrf, err := httpserver.NewCSRF(httpserver.CSRFConfig{BaseURL: cfg.AppBaseURL, Secret: cfg.JWTSecret})
+	if err != nil {
+		return fmt.Errorf("create csrf protection: %w", err)
+	}
+
 	outboxDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherDeps{
 		Logger:    logger.With("module", "subscription_outbox"),
 		Store:     outbox.NewSubscriptionOutbox(queries),
@@ -183,15 +203,22 @@ func (cfg *Config) run(g *app.Group, logger *slog.Logger) error {
 	httpMetrics := httpserver.NewMetrics(metricsReg)
 
 	router := gin.New()
-	router.Use(httpserver.ObservabilityMiddleware(httpLogger, httpMetrics, false))
+	router.Use(httpserver.SecurityHeaders())
+	router.Use(httpserver.ObservabilityMiddleware(httpLogger, httpMetrics, httpserver.ObservabilityConfig{}))
 	router.Use(httpserver.Recovery())
 
-	api.RegisterRoutes(router.Group("/api"), api.Deps{
+	if err := api.RegisterRoutes(router.Group("/api"), api.Deps{
 		SubsService: subsSvc,
+		AuthService: authSvc,
 		DocsHost:    cfg.APIHost,
-	})
+	}); err != nil {
+		return fmt.Errorf("register api routes: %w", err)
+	}
 	web.RegisterRoutes(router.Group("/"), web.Deps{
 		SubsService: subsSvc,
+		AuthService: authSvc,
+		Cookies:     cookies,
+		CSRF:        csrf,
 	})
 
 	router.NoRoute(func(c *gin.Context) {

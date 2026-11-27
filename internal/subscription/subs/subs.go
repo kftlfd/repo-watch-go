@@ -11,8 +11,9 @@ import (
 	"repo-watch/internal/emails"
 	"repo-watch/internal/events"
 	"repo-watch/internal/github"
-	"repo-watch/internal/observability"
 	"repo-watch/internal/subscription/db/dbGen"
+	"repo-watch/internal/subscription/identity"
+	"repo-watch/internal/subscription/outbox"
 )
 
 var (
@@ -49,12 +50,9 @@ func NewService(d Deps) *service {
 	}
 }
 
-func (s *service) CreateSubscription(ctx context.Context, email, repo string) error {
-	emailInfo, err := verifyEmailInfo(email)
-	if err != nil {
-		return ErrInvalidInput
-	}
-
+// CreateSubscription creates a subscription for repo. Anonymous callers get a
+// confirmation email; verified callers are activated immediately.
+func (s *service) CreateSubscription(ctx context.Context, email identity.Email, repo string, verified bool) error {
 	repoInfo, err := verifyRepoInfo(repo)
 	if err != nil {
 		return ErrInvalidInput
@@ -102,20 +100,42 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 	}
 
 	dbSub, err := qtx.CreateSubscription(ctx, dbGen.CreateSubscriptionParams{
-		Email:        emailInfo.email,
+		Email:        email.String(),
 		RepositoryID: repoInfo.repoId,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		dbSub, err = qtx.GetSubscription(ctx, dbGen.GetSubscriptionParams{
-			Email:        emailInfo.email,
+			Email:        email.String(),
 			RepositoryID: repoInfo.repoId,
 		})
 	}
 	if err != nil {
 		return err
 	}
+
 	if dbSub.Active {
-		return ErrSubscriptionConflict
+		if verified {
+			return ErrSubscriptionConflict
+		}
+		return nil
+	}
+
+	if verified {
+		if err = s.activateSubscription(ctx, qtx, dbSub); err != nil {
+			if errors.Is(err, ErrSubscriptionAlreadyActive) {
+				if commitErr := tx.Commit(); commitErr != nil {
+					return commitErr
+				}
+				return ErrSubscriptionConflict
+			}
+			return err
+		}
+
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+
+		return nil
 	}
 
 	tokenVal, err := newToken()
@@ -123,10 +143,10 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return err
 	}
 
-	_, err = qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
+	_, err = qtx.UpsertSubscriptionToken(ctx, dbGen.UpsertSubscriptionTokenParams{
 		SubscriptionID: dbSub.ID,
 		TokenType:      TokenTypeConfirm,
-		TokenVal:       tokenVal,
+		TokenHash:      hashToken(tokenVal),
 	})
 	if err != nil {
 		return err
@@ -140,14 +160,11 @@ func (s *service) CreateSubscription(ctx context.Context, email, repo string) er
 		return err
 	}
 
-	if err = saveToOutbox(ctx, qtx,
-		events.EventEmailQueued,
-		events.EventEmailQueuedPayload{
-			Recipient: emailInfo.email,
-			Type:      emails.EmailConfirmSubscription,
-			Data:      emailData,
-		},
-	); err != nil {
+	if err = outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
+		Recipient: email.String(),
+		Type:      emails.EmailConfirmSubscription,
+		Data:      emailData,
+	}); err != nil {
 		return err
 	}
 
@@ -167,107 +184,39 @@ func (s *service) ConfirmSubscription(ctx context.Context, token string) error {
 
 	qtx := s.q.WithTx(tx)
 
-	t, err := qtx.FindTokenWDate(ctx, dbGen.FindTokenWDateParams{
+	tokenParams := dbGen.FindSubscriptionTokenWDateParams{
 		TokenType: TokenTypeConfirm,
-		TokenVal:  token,
-		CreatedAt: time.Now().Add(-ConfirmTokenValidity),
+		TokenHash: hashToken(token),
+		CreatedAt: time.Now().Add(-SubscriptionTokenConfirmTTL),
+	}
+	candidate, err := qtx.FindSubscriptionTokenWDate(ctx, tokenParams)
+	if err != nil {
+		return err
+	}
+
+	sub, err := qtx.GetSubscriptionByIDForUpdate(ctx, candidate.SubscriptionID)
+	if err != nil {
+		return err
+	}
+
+	t, err := qtx.FindSubscriptionTokenWDateForUpdate(ctx, dbGen.FindSubscriptionTokenWDateForUpdateParams{
+		TokenType: tokenParams.TokenType,
+		TokenHash: tokenParams.TokenHash,
+		CreatedAt: tokenParams.CreatedAt,
 	})
 	if err != nil {
 		return err
 	}
-
-	sub, err := qtx.GetSubscriptionByID(ctx, t.SubscriptionID)
-	if err != nil {
-		return err
+	if t.SubscriptionID != sub.ID {
+		return sql.ErrNoRows
 	}
 
-	updSub, err := qtx.ActivateSubscription(ctx, sub.ID)
-	if errors.Is(err, sql.ErrNoRows) {
-		if err = qtx.DeleteTokensBySubscriptionAndType(ctx, dbGen.DeleteTokensBySubscriptionAndTypeParams{
-			SubscriptionID: sub.ID,
-			TokenType:      TokenTypeConfirm,
-		}); err != nil {
-			return err
+	if err = s.activateSubscription(ctx, qtx, sub); err != nil {
+		if errors.Is(err, ErrSubscriptionAlreadyActive) {
+			if commitErr := tx.Commit(); commitErr != nil {
+				return commitErr
+			}
 		}
-		if err = tx.Commit(); err != nil {
-			return err
-		}
-		return ErrSubscriptionAlreadyActive
-	}
-	if err != nil {
-		return err
-	}
-
-	if err = qtx.DeleteTokensBySubscription(ctx, sub.ID); err != nil {
-		return err
-	}
-
-	unsubTokenVal, err := newToken()
-	if err != nil {
-		return err
-	}
-
-	unsubToken, err := qtx.UpsertToken(ctx, dbGen.UpsertTokenParams{
-		SubscriptionID: sub.ID,
-		TokenType:      TokenTypeUnsub,
-		TokenVal:       unsubTokenVal,
-	})
-	if err != nil {
-		return err
-	}
-
-	updRepo, err := qtx.IncrementRepositoryActiveCount(ctx, sub.RepositoryID)
-	if err != nil {
-		return err
-	}
-
-	if err = saveToOutbox(ctx, qtx,
-		events.EventSubscriptionChanged,
-		events.EventSubscriptionChangedPayload{
-			SubscriptionID: updSub.ID,
-			RepositoryID:   updRepo.ID,
-			Email:          updSub.Email,
-			Active:         updSub.Active,
-			Version:        updSub.ActiveVersion,
-			UnsubToken:     unsubToken.TokenVal,
-			UpdatedAt:      updSub.UpdatedAt,
-		},
-	); err != nil {
-		return err
-	}
-
-	if updRepo.ActiveSubscriptionsCount == 1 {
-		if err = saveToOutbox(ctx, qtx,
-			events.EventRepositoryChanged,
-			events.EventRepositoryChangedPayload{
-				RepositoryID:  updRepo.ID,
-				Owner:         updRepo.Owner,
-				Name:          updRepo.Name,
-				LatestSeenTag: updRepo.InitTag,
-				Active:        updRepo.ActiveSubscriptionsCount > 0,
-				ActiveVersion: updRepo.ActiveVersion,
-				UpdatedAt:     updRepo.UpdatedAt,
-			},
-		); err != nil {
-			return err
-		}
-	}
-
-	emailData, err := json.Marshal(emails.EmailSubscribedData{
-		RepoID: updRepo.ID,
-	})
-	if err != nil {
-		return err
-	}
-
-	if err = saveToOutbox(ctx, qtx,
-		events.EventEmailQueued,
-		events.EventEmailQueuedPayload{
-			Recipient: updSub.Email,
-			Type:      emails.EmailSubscribed,
-			Data:      emailData,
-		},
-	); err != nil {
 		return err
 	}
 
@@ -287,28 +236,181 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 
 	qtx := s.q.WithTx(tx)
 
-	t, err := qtx.FindToken(ctx, dbGen.FindTokenParams{
+	tokenParams := dbGen.FindSubscriptionTokenParams{
 		TokenType: TokenTypeUnsub,
-		TokenVal:  token,
+		TokenHash: hashToken(token),
+	}
+	candidate, err := qtx.FindSubscriptionToken(ctx, tokenParams)
+	if err != nil {
+		return err
+	}
+
+	sub, err := qtx.GetSubscriptionByIDForUpdate(ctx, candidate.SubscriptionID)
+	if err != nil {
+		return err
+	}
+
+	t, err := qtx.FindSubscriptionTokenForUpdate(ctx, dbGen.FindSubscriptionTokenForUpdateParams{
+		TokenType: tokenParams.TokenType,
+		TokenHash: tokenParams.TokenHash,
+	})
+	if err != nil {
+		return err
+	}
+	if t.SubscriptionID != sub.ID {
+		return sql.ErrNoRows
+	}
+
+	if err = s.deactivateSubscription(ctx, qtx, sub); err != nil {
+		if errors.Is(err, ErrSubscriptionAlreadyInactive) {
+			if commitErr := tx.Commit(); commitErr != nil {
+				return commitErr
+			}
+		}
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// DeactivateSubscriptionByRepo deactivates the subscription owned by email for
+// repo.
+func (s *service) DeactivateSubscriptionByRepo(ctx context.Context, email identity.Email, repo string) error {
+	repoInfo, err := verifyRepoInfo(repo)
+	if err != nil {
+		return ErrInvalidInput
+	}
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	qtx := s.q.WithTx(tx)
+
+	sub, err := qtx.GetSubscription(ctx, dbGen.GetSubscriptionParams{
+		Email:        email.String(),
+		RepositoryID: repoInfo.repoId,
 	})
 	if err != nil {
 		return err
 	}
 
-	sub, err := qtx.GetSubscriptionByID(ctx, t.SubscriptionID)
+	if err = s.deactivateSubscription(ctx, qtx, sub); err != nil {
+		if errors.Is(err, ErrSubscriptionAlreadyInactive) {
+			if commitErr := tx.Commit(); commitErr != nil {
+				return commitErr
+			}
+		}
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *service) GetSubscriptionsList(ctx context.Context, email identity.Email) ([]string, error) {
+	subs, err := s.q.ListSubscriptionsByEmail(ctx, email.String())
+	if err != nil {
+		return nil, err
+	}
+
+	return subs, nil
+}
+
+func (s *service) activateSubscription(ctx context.Context, qtx *dbGen.Queries, sub dbGen.Subscription) error {
+	updSub, err := qtx.ActivateSubscription(ctx, sub.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err = qtx.DeleteSubscriptionTokensBySubIDAndType(ctx, dbGen.DeleteSubscriptionTokensBySubIDAndTypeParams{
+			SubscriptionID: sub.ID,
+			TokenType:      TokenTypeConfirm,
+		}); err != nil {
+			return err
+		}
+		return ErrSubscriptionAlreadyActive
+	}
 	if err != nil {
 		return err
 	}
 
-	updSub, err := qtx.DeactivateSubscription(ctx, sub.ID)
-	if errors.Is(err, sql.ErrNoRows) {
-		if err = qtx.DeleteTokensBySubscriptionAndType(ctx, dbGen.DeleteTokensBySubscriptionAndTypeParams{
-			SubscriptionID: sub.ID,
-			TokenType:      TokenTypeUnsub,
+	if err = qtx.DeleteSubscriptionTokensBySubID(ctx, sub.ID); err != nil {
+		return err
+	}
+
+	unsubTokenVal, err := newToken()
+	if err != nil {
+		return err
+	}
+
+	_, err = qtx.UpsertSubscriptionToken(ctx, dbGen.UpsertSubscriptionTokenParams{
+		SubscriptionID: sub.ID,
+		TokenType:      TokenTypeUnsub,
+		TokenHash:      hashToken(unsubTokenVal),
+	})
+	if err != nil {
+		return err
+	}
+
+	updRepo, err := qtx.IncrementRepositoryActiveCount(ctx, sub.RepositoryID)
+	if err != nil {
+		return err
+	}
+
+	if err = outbox.NewSubscriptionChanged(ctx, qtx, events.EventSubscriptionChangedPayload{
+		SubscriptionID: updSub.ID,
+		RepositoryID:   updRepo.ID,
+		Email:          updSub.Email,
+		Active:         updSub.Active,
+		Version:        updSub.ActiveVersion,
+		UnsubToken:     unsubTokenVal,
+		UpdatedAt:      updSub.UpdatedAt,
+	}); err != nil {
+		return err
+	}
+
+	if updRepo.ActiveSubscriptionsCount == 1 {
+		if err = outbox.NewRepositoryChanged(ctx, qtx, events.EventRepositoryChangedPayload{
+			RepositoryID:  updRepo.ID,
+			Owner:         updRepo.Owner,
+			Name:          updRepo.Name,
+			LatestSeenTag: updRepo.InitTag,
+			Active:        updRepo.ActiveSubscriptionsCount > 0,
+			ActiveVersion: updRepo.ActiveVersion,
+			UpdatedAt:     updRepo.UpdatedAt,
 		}); err != nil {
 			return err
 		}
-		if err = tx.Commit(); err != nil {
+	}
+
+	emailData, err := json.Marshal(emails.EmailSubscribedData{
+		RepoID: updRepo.ID,
+	})
+	if err != nil {
+		return err
+	}
+
+	return outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
+		Recipient: updSub.Email,
+		Type:      emails.EmailSubscribed,
+		Data:      emailData,
+	})
+}
+
+func (s *service) deactivateSubscription(ctx context.Context, qtx *dbGen.Queries, sub dbGen.Subscription) error {
+	updSub, err := qtx.DeactivateSubscription(ctx, sub.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err = qtx.DeleteSubscriptionTokensBySubIDAndType(ctx, dbGen.DeleteSubscriptionTokensBySubIDAndTypeParams{
+			SubscriptionID: sub.ID,
+			TokenType:      TokenTypeUnsub,
+		}); err != nil {
 			return err
 		}
 		return ErrSubscriptionAlreadyInactive
@@ -317,7 +419,7 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	if err = qtx.DeleteTokensBySubscription(ctx, sub.ID); err != nil {
+	if err = qtx.DeleteSubscriptionTokensBySubID(ctx, sub.ID); err != nil {
 		return err
 	}
 
@@ -326,33 +428,27 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	if err = saveToOutbox(ctx, qtx,
-		events.EventSubscriptionChanged,
-		events.EventSubscriptionChangedPayload{
-			SubscriptionID: updSub.ID,
-			RepositoryID:   updRepo.ID,
-			Email:          updSub.Email,
-			Active:         updSub.Active,
-			Version:        updSub.ActiveVersion,
-			UpdatedAt:      updSub.UpdatedAt,
-		},
-	); err != nil {
+	if err = outbox.NewSubscriptionChanged(ctx, qtx, events.EventSubscriptionChangedPayload{
+		SubscriptionID: updSub.ID,
+		RepositoryID:   updRepo.ID,
+		Email:          updSub.Email,
+		Active:         updSub.Active,
+		Version:        updSub.ActiveVersion,
+		UpdatedAt:      updSub.UpdatedAt,
+	}); err != nil {
 		return err
 	}
 
 	if updRepo.ActiveSubscriptionsCount == 0 {
-		if err = saveToOutbox(ctx, qtx,
-			events.EventRepositoryChanged,
-			events.EventRepositoryChangedPayload{
-				RepositoryID:  updRepo.ID,
-				Owner:         updRepo.Owner,
-				Name:          updRepo.Name,
-				LatestSeenTag: updRepo.InitTag,
-				Active:        updRepo.ActiveSubscriptionsCount > 0,
-				ActiveVersion: updRepo.ActiveVersion,
-				UpdatedAt:     updRepo.UpdatedAt,
-			},
-		); err != nil {
+		if err = outbox.NewRepositoryChanged(ctx, qtx, events.EventRepositoryChangedPayload{
+			RepositoryID:  updRepo.ID,
+			Owner:         updRepo.Owner,
+			Name:          updRepo.Name,
+			LatestSeenTag: updRepo.InitTag,
+			Active:        updRepo.ActiveSubscriptionsCount > 0,
+			ActiveVersion: updRepo.ActiveVersion,
+			UpdatedAt:     updRepo.UpdatedAt,
+		}); err != nil {
 			return err
 		}
 	}
@@ -364,58 +460,9 @@ func (s *service) DeactivateSubscription(ctx context.Context, token string) erro
 		return err
 	}
 
-	if err = saveToOutbox(ctx, qtx,
-		events.EventEmailQueued,
-		events.EventEmailQueuedPayload{
-			Recipient: updSub.Email,
-			Type:      emails.EmailUnsubscribed,
-			Data:      emailData,
-		},
-	); err != nil {
-		return err
-	}
-
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (s *service) GetSubscriptionsList(ctx context.Context, email string) ([]string, error) {
-	email, err := NormalizeEmail(email)
-	if err != nil {
-		return nil, ErrInvalidInput
-	}
-
-	subs, err := s.q.ListSubscriptionsByEmail(ctx, email)
-	if err != nil {
-		return nil, err
-	}
-
-	return subs, nil
-}
-
-func saveToOutbox(ctx context.Context, qtx *dbGen.Queries, eventType string, eventPayload any) error {
-	eventVersion, ok := events.CurrentVersion(eventType)
-	if !ok {
-		return fmt.Errorf("unknown event type: %q", eventType)
-	}
-
-	jsonData, err := json.Marshal(eventPayload)
-	if err != nil {
-		return fmt.Errorf("json marshal event: %w", err)
-	}
-
-	traceParent, _ := observability.GetTraceParent(ctx)
-
-	_, err = qtx.CreateOutboxRow(ctx, dbGen.CreateOutboxRowParams{
-		EventType:     eventType,
-		EventVersion:  eventVersion,
-		CorrelationID: observability.GetCorrelationID(ctx),
-		TraceParent:   traceParent,
-		Payload:       jsonData,
+	return outbox.NewEmail(ctx, qtx, events.EventEmailQueuedPayload{
+		Recipient: updSub.Email,
+		Type:      emails.EmailUnsubscribed,
+		Data:      emailData,
 	})
-
-	return err
 }

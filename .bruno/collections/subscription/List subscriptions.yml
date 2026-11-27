@@ -5,12 +5,10 @@ info:
 
 http:
   method: GET
-  url: "{{URL}}/api/subscriptions?email=me@test.com"
-  params:
-    - name: email
-      value: me@test.com
-      type: query
-  auth: inherit
+  url: "{{URL}}/api/subscriptions"
+  auth:
+    type: bearer
+    token: "{{accessToken}}"
 
 settings:
   encodeUrl: true

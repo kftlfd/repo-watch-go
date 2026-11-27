@@ -17,6 +17,12 @@ SELECT *
 FROM subscriptions
 WHERE id = $1;
 
+-- name: GetSubscriptionByIDForUpdate :one
+SELECT *
+FROM subscriptions
+WHERE id = $1
+FOR UPDATE;
+
 -- name: ActivateSubscription :one
 UPDATE subscriptions
 SET
@@ -52,7 +58,7 @@ WHERE subscriptions.email = $1
     AND subscriptions.active = true
 ORDER BY subscriptions.created_at ASC;
 
--- name: DeactivateSubsForRepoAndRemoveTokens :exec
+-- name: DeactivateSubscriptionsForRepoAndRemoveSubscriptionTokens :exec
 WITH removed_subs as (
     UPDATE subscriptions
     SET
@@ -63,7 +69,7 @@ WITH removed_subs as (
         AND active = true
     RETURNING id
 )
-DELETE FROM tokens
+DELETE FROM subscription_tokens
 WHERE subscription_id IN (
     SELECT id FROM removed_subs
 );

@@ -1,38 +1,53 @@
--- name: UpsertToken :one
-INSERT INTO tokens
-    (subscription_id, token_type, token_val)
+-- name: UpsertSubscriptionToken :one
+INSERT INTO subscription_tokens
+    (subscription_id, token_type, token_hash)
 VALUES
     ($1, $2, $3)
 ON CONFLICT (subscription_id, token_type) DO UPDATE
 SET
-    token_val = EXCLUDED.token_val,
+    token_hash = EXCLUDED.token_hash,
     created_at = now()
 RETURNING *;
 
--- name: GetToken :one
+-- name: GetSubscriptionToken :one
 SELECT *
-FROM tokens
+FROM subscription_tokens
 WHERE subscription_id = $1
     AND token_type = $2;
 
--- name: FindToken :one
+-- name: FindSubscriptionToken :one
 SELECT *
-FROM tokens
+FROM subscription_tokens
 WHERE token_type = $1
-    AND token_val = $2;
+    AND token_hash = $2;
 
--- name: FindTokenWDate :one
+-- name: FindSubscriptionTokenForUpdate :one
 SELECT *
-FROM tokens
+FROM subscription_tokens
 WHERE token_type = $1
-    AND token_val = $2
+    AND token_hash = $2
+FOR UPDATE;
+
+-- name: FindSubscriptionTokenWDate :one
+SELECT *
+FROM subscription_tokens
+WHERE token_type = $1
+    AND token_hash = $2
     AND created_at > $3;
 
--- name: DeleteTokensBySubscription :exec
-DELETE FROM tokens
+-- name: FindSubscriptionTokenWDateForUpdate :one
+SELECT *
+FROM subscription_tokens
+WHERE token_type = $1
+    AND token_hash = $2
+    AND created_at > $3
+FOR UPDATE;
+
+-- name: DeleteSubscriptionTokensBySubID :exec
+DELETE FROM subscription_tokens
 WHERE subscription_id = $1;
 
--- name: DeleteTokensBySubscriptionAndType :exec
-DELETE FROM tokens
+-- name: DeleteSubscriptionTokensBySubIDAndType :exec
+DELETE FROM subscription_tokens
 WHERE subscription_id = $1
     AND token_type = $2;

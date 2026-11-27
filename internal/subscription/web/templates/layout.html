@@ -8,6 +8,22 @@
     <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body>
+    <header class="site-header">
+      <a class="brand" href="/">repo-watch</a>
+      <nav>
+        {{if .SessionEmail}}
+          <span class="session-email">{{.SessionEmail}}</span>
+          <a href="/subscriptions">Subscriptions</a>
+          <form class="inline-form" method="post" action="/logout">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}" />
+            <button class="link-button" type="submit">Log out</button>
+          </form>
+        {{else}}
+          <a href="/login">Log in</a>
+          <a href="/signup">Sign up</a>
+        {{end}}
+      </nav>
+    </header>
     <main>
 {{end}}
 

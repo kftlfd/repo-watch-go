@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"repo-watch/internal/observability"
 	"repo-watch/internal/postgres"
@@ -16,20 +17,26 @@ type Config struct {
 	PortAPI     string
 	PortAdmin   string
 	APIHost     string
+	AppBaseURL  string
 	Db          postgres.Config
 	RabbitMQUrl string
 	GhApiUrl    string
 	GithubToken string
+
+	JWTSecret       []byte
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
 }
 
 func loadConfig() *Config {
 	return &Config{
 		LogLevel: observability.ParseLevel(os.Getenv("LOG_LEVEL")),
 
-		IsDev:     os.Getenv("ENV") == "dev",
-		PortAPI:   utils.Env("PORT", "3000"),
-		PortAdmin: utils.Env("PORT_ADMIN", "4000"),
-		APIHost:   utils.Env("API_HOST", "localhost:3000"),
+		IsDev:      os.Getenv("ENV") == "dev",
+		PortAPI:    utils.Env("PORT", "3000"),
+		PortAdmin:  utils.Env("PORT_ADMIN", "4000"),
+		APIHost:    utils.Env("API_HOST", "localhost:3000"),
+		AppBaseURL: utils.Env("APP_BASE_URL", "http://localhost:3000"),
 
 		Db: postgres.Config{
 			URL:      os.Getenv("DB_URL"),
@@ -44,6 +51,10 @@ func loadConfig() *Config {
 
 		GhApiUrl:    utils.Env("GH_API_URL", "https://api.github.com"),
 		GithubToken: os.Getenv("GITHUB_TOKEN"),
+
+		JWTSecret:       []byte(os.Getenv("JWT_SECRET")),
+		AccessTokenTTL:  utils.EnvDuration("ACCESS_TOKEN_TTL", 0),
+		RefreshTokenTTL: utils.EnvDuration("REFRESH_TOKEN_TTL", 0),
 	}
 }
 

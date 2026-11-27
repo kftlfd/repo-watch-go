@@ -1,0 +1,20 @@
+info:
+  name: Verify email
+  type: http
+  seq: 11
+
+http:
+  method: POST
+  url: "{{URL}}/api/auth/verify/:token"
+  params:
+    - name: token
+      value: verification-token-from-email
+      type: path
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true

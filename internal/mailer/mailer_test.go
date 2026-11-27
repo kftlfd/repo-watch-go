@@ -19,6 +19,15 @@ func TestRenderEmail(t *testing.T) {
 		wantBody    string
 	}{
 		{
+			name:      "verify account",
+			emailType: emails.EmailVerifyAccount,
+			data: emails.EmailVerifyAccountData{
+				VerifyToken: "verify-token",
+			},
+			wantSubject: "Verify your email address",
+			wantBody:    "https://example.test/verify/verify-token",
+		},
+		{
 			name:      "confirm subscription",
 			emailType: emails.EmailConfirmSubscription,
 			data: emails.EmailConfirmSubscriptionData{

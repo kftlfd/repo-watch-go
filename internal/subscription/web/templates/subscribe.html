@@ -3,10 +3,15 @@
       <p>Get an email when a GitHub repository publishes a new release.</p>
       {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
       <form method="post" action="/subscribe">
-        <label>
-          Email
-          <input type="email" name="email" value="{{.Email}}" autocomplete="email" required />
-        </label>
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}" />
+        {{if .SessionEmail}}
+          <p>Subscribing as <strong>{{.SessionEmail}}</strong>.</p>
+        {{else}}
+          <label>
+            Email
+            <input type="email" name="email" value="{{.Email}}" autocomplete="email" required />
+          </label>
+        {{end}}
         <label>
           Repository
           <input type="text" name="repo" value="{{.Repo}}" placeholder="owner/name" required />

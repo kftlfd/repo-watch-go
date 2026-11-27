@@ -10,135 +10,189 @@ import (
 	"time"
 )
 
-const deleteTokensBySubscription = `-- name: DeleteTokensBySubscription :exec
-DELETE FROM tokens
+const deleteSubscriptionTokensBySubID = `-- name: DeleteSubscriptionTokensBySubID :exec
+DELETE FROM subscription_tokens
 WHERE subscription_id = $1
 `
 
-func (q *Queries) DeleteTokensBySubscription(ctx context.Context, subscriptionID int32) error {
-	_, err := q.db.ExecContext(ctx, deleteTokensBySubscription, subscriptionID)
+func (q *Queries) DeleteSubscriptionTokensBySubID(ctx context.Context, subscriptionID int32) error {
+	_, err := q.db.ExecContext(ctx, deleteSubscriptionTokensBySubID, subscriptionID)
 	return err
 }
 
-const deleteTokensBySubscriptionAndType = `-- name: DeleteTokensBySubscriptionAndType :exec
-DELETE FROM tokens
+const deleteSubscriptionTokensBySubIDAndType = `-- name: DeleteSubscriptionTokensBySubIDAndType :exec
+DELETE FROM subscription_tokens
 WHERE subscription_id = $1
     AND token_type = $2
 `
 
-type DeleteTokensBySubscriptionAndTypeParams struct {
+type DeleteSubscriptionTokensBySubIDAndTypeParams struct {
 	SubscriptionID int32
 	TokenType      string
 }
 
-func (q *Queries) DeleteTokensBySubscriptionAndType(ctx context.Context, arg DeleteTokensBySubscriptionAndTypeParams) error {
-	_, err := q.db.ExecContext(ctx, deleteTokensBySubscriptionAndType, arg.SubscriptionID, arg.TokenType)
+func (q *Queries) DeleteSubscriptionTokensBySubIDAndType(ctx context.Context, arg DeleteSubscriptionTokensBySubIDAndTypeParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSubscriptionTokensBySubIDAndType, arg.SubscriptionID, arg.TokenType)
 	return err
 }
 
-const findToken = `-- name: FindToken :one
-SELECT id, subscription_id, token_type, token_val, created_at
-FROM tokens
+const findSubscriptionToken = `-- name: FindSubscriptionToken :one
+SELECT id, subscription_id, token_type, token_hash, created_at
+FROM subscription_tokens
 WHERE token_type = $1
-    AND token_val = $2
+    AND token_hash = $2
 `
 
-type FindTokenParams struct {
+type FindSubscriptionTokenParams struct {
 	TokenType string
-	TokenVal  string
+	TokenHash string
 }
 
-func (q *Queries) FindToken(ctx context.Context, arg FindTokenParams) (Token, error) {
-	row := q.db.QueryRowContext(ctx, findToken, arg.TokenType, arg.TokenVal)
-	var i Token
+func (q *Queries) FindSubscriptionToken(ctx context.Context, arg FindSubscriptionTokenParams) (SubscriptionToken, error) {
+	row := q.db.QueryRowContext(ctx, findSubscriptionToken, arg.TokenType, arg.TokenHash)
+	var i SubscriptionToken
 	err := row.Scan(
 		&i.ID,
 		&i.SubscriptionID,
 		&i.TokenType,
-		&i.TokenVal,
+		&i.TokenHash,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
-const findTokenWDate = `-- name: FindTokenWDate :one
-SELECT id, subscription_id, token_type, token_val, created_at
-FROM tokens
+const findSubscriptionTokenForUpdate = `-- name: FindSubscriptionTokenForUpdate :one
+SELECT id, subscription_id, token_type, token_hash, created_at
+FROM subscription_tokens
 WHERE token_type = $1
-    AND token_val = $2
+    AND token_hash = $2
+FOR UPDATE
+`
+
+type FindSubscriptionTokenForUpdateParams struct {
+	TokenType string
+	TokenHash string
+}
+
+func (q *Queries) FindSubscriptionTokenForUpdate(ctx context.Context, arg FindSubscriptionTokenForUpdateParams) (SubscriptionToken, error) {
+	row := q.db.QueryRowContext(ctx, findSubscriptionTokenForUpdate, arg.TokenType, arg.TokenHash)
+	var i SubscriptionToken
+	err := row.Scan(
+		&i.ID,
+		&i.SubscriptionID,
+		&i.TokenType,
+		&i.TokenHash,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const findSubscriptionTokenWDate = `-- name: FindSubscriptionTokenWDate :one
+SELECT id, subscription_id, token_type, token_hash, created_at
+FROM subscription_tokens
+WHERE token_type = $1
+    AND token_hash = $2
     AND created_at > $3
 `
 
-type FindTokenWDateParams struct {
+type FindSubscriptionTokenWDateParams struct {
 	TokenType string
-	TokenVal  string
+	TokenHash string
 	CreatedAt time.Time
 }
 
-func (q *Queries) FindTokenWDate(ctx context.Context, arg FindTokenWDateParams) (Token, error) {
-	row := q.db.QueryRowContext(ctx, findTokenWDate, arg.TokenType, arg.TokenVal, arg.CreatedAt)
-	var i Token
+func (q *Queries) FindSubscriptionTokenWDate(ctx context.Context, arg FindSubscriptionTokenWDateParams) (SubscriptionToken, error) {
+	row := q.db.QueryRowContext(ctx, findSubscriptionTokenWDate, arg.TokenType, arg.TokenHash, arg.CreatedAt)
+	var i SubscriptionToken
 	err := row.Scan(
 		&i.ID,
 		&i.SubscriptionID,
 		&i.TokenType,
-		&i.TokenVal,
+		&i.TokenHash,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
-const getToken = `-- name: GetToken :one
-SELECT id, subscription_id, token_type, token_val, created_at
-FROM tokens
+const findSubscriptionTokenWDateForUpdate = `-- name: FindSubscriptionTokenWDateForUpdate :one
+SELECT id, subscription_id, token_type, token_hash, created_at
+FROM subscription_tokens
+WHERE token_type = $1
+    AND token_hash = $2
+    AND created_at > $3
+FOR UPDATE
+`
+
+type FindSubscriptionTokenWDateForUpdateParams struct {
+	TokenType string
+	TokenHash string
+	CreatedAt time.Time
+}
+
+func (q *Queries) FindSubscriptionTokenWDateForUpdate(ctx context.Context, arg FindSubscriptionTokenWDateForUpdateParams) (SubscriptionToken, error) {
+	row := q.db.QueryRowContext(ctx, findSubscriptionTokenWDateForUpdate, arg.TokenType, arg.TokenHash, arg.CreatedAt)
+	var i SubscriptionToken
+	err := row.Scan(
+		&i.ID,
+		&i.SubscriptionID,
+		&i.TokenType,
+		&i.TokenHash,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSubscriptionToken = `-- name: GetSubscriptionToken :one
+SELECT id, subscription_id, token_type, token_hash, created_at
+FROM subscription_tokens
 WHERE subscription_id = $1
     AND token_type = $2
 `
 
-type GetTokenParams struct {
+type GetSubscriptionTokenParams struct {
 	SubscriptionID int32
 	TokenType      string
 }
 
-func (q *Queries) GetToken(ctx context.Context, arg GetTokenParams) (Token, error) {
-	row := q.db.QueryRowContext(ctx, getToken, arg.SubscriptionID, arg.TokenType)
-	var i Token
+func (q *Queries) GetSubscriptionToken(ctx context.Context, arg GetSubscriptionTokenParams) (SubscriptionToken, error) {
+	row := q.db.QueryRowContext(ctx, getSubscriptionToken, arg.SubscriptionID, arg.TokenType)
+	var i SubscriptionToken
 	err := row.Scan(
 		&i.ID,
 		&i.SubscriptionID,
 		&i.TokenType,
-		&i.TokenVal,
+		&i.TokenHash,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
-const upsertToken = `-- name: UpsertToken :one
-INSERT INTO tokens
-    (subscription_id, token_type, token_val)
+const upsertSubscriptionToken = `-- name: UpsertSubscriptionToken :one
+INSERT INTO subscription_tokens
+    (subscription_id, token_type, token_hash)
 VALUES
     ($1, $2, $3)
 ON CONFLICT (subscription_id, token_type) DO UPDATE
 SET
-    token_val = EXCLUDED.token_val,
+    token_hash = EXCLUDED.token_hash,
     created_at = now()
-RETURNING id, subscription_id, token_type, token_val, created_at
+RETURNING id, subscription_id, token_type, token_hash, created_at
 `
 
-type UpsertTokenParams struct {
+type UpsertSubscriptionTokenParams struct {
 	SubscriptionID int32
 	TokenType      string
-	TokenVal       string
+	TokenHash      string
 }
 
-func (q *Queries) UpsertToken(ctx context.Context, arg UpsertTokenParams) (Token, error) {
-	row := q.db.QueryRowContext(ctx, upsertToken, arg.SubscriptionID, arg.TokenType, arg.TokenVal)
-	var i Token
+func (q *Queries) UpsertSubscriptionToken(ctx context.Context, arg UpsertSubscriptionTokenParams) (SubscriptionToken, error) {
+	row := q.db.QueryRowContext(ctx, upsertSubscriptionToken, arg.SubscriptionID, arg.TokenType, arg.TokenHash)
+	var i SubscriptionToken
 	err := row.Scan(
 		&i.ID,
 		&i.SubscriptionID,
 		&i.TokenType,
-		&i.TokenVal,
+		&i.TokenHash,
 		&i.CreatedAt,
 	)
 	return i, err

@@ -8,46 +8,51 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"repo-watch/internal/httpserver"
+	"repo-watch/internal/subscription/auth"
+	"repo-watch/internal/subscription/identity"
 	"repo-watch/internal/subscription/subs"
 )
 
 const (
-	errNotFound            = "not found"
-	errInvalidEmail        = "invalid email"
-	errInvalidInput        = "invalid email or repository"
-	errRepoNotFound        = "repository not found"
-	errAlreadyExists       = "subscription already exists"
-	errRateLimited         = "github rate limit exceeded"
-	errUpstream            = "github upstream error"
-	errInvalidToken        = "invalid token"
-	errTokenNotFound       = "token not found"
-	errAlreadyConfirmed    = "subscription already confirmed"
-	errAlreadyUnsubscribed = "subscription already unsubscribed"
-	errInternal            = "internal server error"
-	errBodyTooLarge        = "request body too large"
-	msgCheckEmail          = "check email to confirm subscription"
-	msgConfirmed           = "subscription confirmed"
-	msgUnsubscribed        = "unsubscribed"
+	errNotFound             = "not found"
+	errInvalidInput         = "invalid email or repository"
+	errRepoNotFound         = "repository not found"
+	errAlreadyExists        = "subscription already exists"
+	errRateLimited          = "github rate limit exceeded"
+	errUpstream             = "github upstream error"
+	errInvalidToken         = "invalid token"
+	errTokenNotFound        = "token not found"
+	errAlreadyConfirmed     = "subscription already confirmed"
+	errAlreadyUnsubscribed  = "subscription already unsubscribed"
+	errEmailMismatch        = "email does not match authenticated user"
+	errSubscriptionNotFound = "subscription not found"
+	errInternal             = "internal server error"
+	msgCheckEmail           = "check email to confirm subscription"
+	msgSubscribed           = "subscription active"
+	msgConfirmed            = "subscription confirmed"
+	msgUnsubscribed         = "unsubscribed"
 )
 
 func NotFound(c *gin.Context) {
 	c.JSON(http.StatusNotFound, errorResponse{Error: errNotFound})
 }
 
-// handleCreateSubscription creates a subscription for an email address and
-// GitHub repository, then queues a confirmation email
+// handleCreateSubscription creates a subscription for a GitHub repository.
+// Anonymous requests queue a confirmation email; Bearer requests activate the
+// session user's subscription immediately.
 //
 // @Summary      Create a subscription
-// @Description  Creates a pending subscription for a GitHub repository and queues a confirmation email.
+// @Description  Anonymous requests create a pending subscription and queue a confirmation email. Requests with a Bearer token subscribe the session user and activate immediately.
 // @Tags         Subscriptions
 // @Accept       json,x-www-form-urlencoded
 // @Produce      json
-// @Param        request       body    createSubscriptionRequest  true   "Email address and GitHub repository to subscribe to"
-// @Success      200  {object}  messageResponse  "Confirmation email queued"
+// @Param        request       body    createSubscriptionRequest  true   "Email for anonymous requests and GitHub repository; authenticated requests may omit email"
+// @Success      200  {object}  messageResponse  "Confirmation email queued or subscription activated"
 // @Failure      400  {object}  errorResponse    "Malformed request body or invalid email/repository"
+// @Failure      401  {object}  errorResponse    "Present but invalid Bearer token"
+// @Failure      403  {object}  errorResponse    "Supplied email is invalid or does not match the authenticated user"
 // @Failure      404  {object}  errorResponse    "Repository not found on GitHub"
 // @Failure      409  {object}  errorResponse    "An active subscription already exists"
-// @Failure      413  {object}  errorResponse    "Request body exceeds the 1 MiB limit"
 // @Failure      429  {object}  errorResponse    "GitHub rate limit exceeded"
 // @Failure      500  {object}  errorResponse    "Internal server error"
 // @Failure      502  {object}  errorResponse    "GitHub upstream error"
@@ -55,15 +60,36 @@ func NotFound(c *gin.Context) {
 func (h *apiHandler) handleCreateSubscription(c *gin.Context) {
 	req := createSubscriptionRequest{}
 	if err := c.ShouldBind(&req); err != nil {
-		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			c.JSON(http.StatusRequestEntityTooLarge, errorResponse{Error: errBodyTooLarge})
-			return
-		}
 		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidInput})
 		return
 	}
 
-	if err := h.subsService.CreateSubscription(c.Request.Context(), req.Email, req.Repo); err != nil {
+	if session, ok := auth.SessionFromContext(c); ok {
+		email := identity.Email(session.User.Email)
+		if req.Email != "" {
+			requested, _ := identity.ParseEmail(req.Email)
+			if requested != email {
+				c.JSON(http.StatusForbidden, errorResponse{Error: errEmailMismatch})
+				return
+			}
+		}
+
+		if err := h.subsService.CreateSubscription(c.Request.Context(), email, req.Repo, true); err != nil {
+			h.respondServiceError(c, "create subscription", err)
+			return
+		}
+
+		c.JSON(http.StatusOK, messageResponse{Message: msgSubscribed})
+		return
+	}
+
+	email, err := identity.ParseEmail(req.Email)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidInput})
+		return
+	}
+
+	if err := h.subsService.CreateSubscription(c.Request.Context(), email, req.Repo, false); err != nil {
 		h.respondServiceError(c, "create subscription", err)
 		return
 	}
@@ -129,24 +155,26 @@ func (h *apiHandler) handleDeactivateSubscription(c *gin.Context) {
 	c.JSON(http.StatusOK, messageResponse{Message: msgUnsubscribed})
 }
 
-// handleListSubscriptions returns the active subscriptions for an email
+// handleListSubscriptions returns the active subscriptions for the
+// authenticated user.
 //
 // @Summary      List active subscriptions
-// @Description  Returns all active subscriptions for the email address (case-insensitive).
+// @Description  Returns the authenticated user's active subscriptions.
 // @Tags         Subscriptions
 // @Produce      json
-// @Param        email         query   string  true   "Email address (bare address only, for example alice@example.com)"
+// @Security     BearerAuth
 // @Success      200  {array}   subscriptionResponse  "Active subscriptions; an empty array is returned when none exist"
-// @Failure      400  {object}  errorResponse          "Missing or invalid email"
+// @Failure      401  {object}  errorResponse          "Missing, invalid, expired, or revoked access token"
 // @Failure      500  {object}  errorResponse          "Internal server error"
 // @Router       /subscriptions [get]
 func (h *apiHandler) handleListSubscriptions(c *gin.Context) {
-	email, err := subs.NormalizeEmail(c.Query("email"))
+	session, err := auth.RequireSession(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidEmail})
+		h.respondInternalError(c, "load authenticated session", err)
 		return
 	}
 
+	email := identity.Email(session.User.Email)
 	repos, err := h.subsService.GetSubscriptionsList(c.Request.Context(), email)
 	if err != nil {
 		h.respondInternalError(c, "list subscriptions", err)
@@ -156,13 +184,60 @@ func (h *apiHandler) handleListSubscriptions(c *gin.Context) {
 	resp := make([]subscriptionResponse, len(repos))
 	for i, repo := range repos {
 		resp[i] = subscriptionResponse{
-			Email:     email,
 			Repo:      repo,
 			Confirmed: true,
 		}
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// handleUnsubscribeByRepo deactivates the authenticated user's subscription to
+// a repository.
+//
+// @Summary      Unsubscribe from a repository
+// @Description  Deactivates the authenticated user's active subscription to the given repository.
+// @Tags         Subscriptions
+// @Accept       json,x-www-form-urlencoded
+// @Produce      json
+// @Security     BearerAuth
+// @Param        request       body    unsubscribeRequest  true   "GitHub repository"
+// @Success      200  {object}  messageResponse  "Subscription deactivated"
+// @Failure      400  {object}  errorResponse    "Malformed request or invalid repository"
+// @Failure      401  {object}  errorResponse    "Missing, invalid, expired, or revoked access token"
+// @Failure      404  {object}  errorResponse    "Subscription not found"
+// @Failure      409  {object}  errorResponse    "Subscription is already inactive"
+// @Failure      500  {object}  errorResponse    "Internal server error"
+// @Router       /subscriptions/unsubscribe [post]
+func (h *apiHandler) handleUnsubscribeByRepo(c *gin.Context) {
+	session, err := auth.RequireSession(c)
+	if err != nil {
+		h.respondInternalError(c, "load authenticated session", err)
+		return
+	}
+
+	req := unsubscribeRequest{}
+	if err := c.ShouldBind(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidInput})
+		return
+	}
+
+	email := identity.Email(session.User.Email)
+	if err := h.subsService.DeactivateSubscriptionByRepo(c.Request.Context(), email, req.Repo); err != nil {
+		switch {
+		case errors.Is(err, subs.ErrInvalidInput):
+			c.JSON(http.StatusBadRequest, errorResponse{Error: errInvalidInput})
+		case errors.Is(err, sql.ErrNoRows):
+			c.JSON(http.StatusNotFound, errorResponse{Error: errSubscriptionNotFound})
+		case errors.Is(err, subs.ErrSubscriptionAlreadyInactive):
+			c.JSON(http.StatusConflict, errorResponse{Error: errAlreadyUnsubscribed})
+		default:
+			h.respondInternalError(c, "unsubscribe", err)
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, messageResponse{Message: msgUnsubscribed})
 }
 
 func (h *apiHandler) respondServiceError(c *gin.Context, operation string, err error) {

@@ -1,0 +1,32 @@
+info:
+  name: Login
+  type: http
+  seq: 13
+
+http:
+  method: POST
+  url: "{{URL}}/api/auth/login"
+  body:
+    type: form-urlencoded
+    data:
+      - name: email
+        value: me@test.com
+      - name: password
+        value: correct-horse-battery-staple
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |-
+        if (res.body.access_token) {
+          bru.setVar("accessToken", res.body.access_token);
+          bru.setVar("refreshToken", res.body.refresh_token);
+        }
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true

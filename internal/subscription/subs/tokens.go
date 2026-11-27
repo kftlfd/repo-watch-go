@@ -1,33 +1,31 @@
 package subs
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"time"
+
+	"repo-watch/internal/securetoken"
 )
 
 const (
 	TokenTypeConfirm = "confirm"
 	TokenTypeUnsub   = "unsub"
 
-	ConfirmTokenValidity = time.Hour
+	SubscriptionTokenConfirmTTL = time.Hour
 
 	tokenBytes = 16
 )
 
 func newToken() (string, error) {
-	token := make([]byte, tokenBytes)
+	return securetoken.Generate(tokenBytes)
+}
 
-	if _, err := rand.Read(token); err != nil {
-		return "", err
-	}
-
-	return base64.RawURLEncoding.EncodeToString(token), nil
+func hashToken(token string) string {
+	return securetoken.Hash(token)
 }
 
 // ValidateToken reports whether token has the shape produced by newToken. It
-// lets the API reject malformed tokens before querying the database.
+// lets the API reject malformed tokens before hashing and querying the
+// database.
 func ValidateToken(token string) bool {
-	b, err := base64.RawURLEncoding.DecodeString(token)
-	return err == nil && len(b) == tokenBytes
+	return securetoken.Validate(token, tokenBytes)
 }

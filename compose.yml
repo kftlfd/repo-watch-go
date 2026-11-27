@@ -13,12 +13,51 @@ x-app: &app
     PORT_ADMIN: 4000
     DB_URL: postgres://postgres:postgres@postgres:5432?sslmode=disable
     RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+    DB_AUTO_CREATE: false
+    DB_AUTO_MIGRATE: false
   healthcheck:
     test: [ "CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:4000/ready || exit 1" ]
     interval: 10s
     timeout: 5s
     retries: 5
     start_period: 15s
+
+x-migrate: &migrate
+  command: [ "migrate" ]
+  restart: no
+  depends_on:
+    postgres:
+      condition: service_healthy
+  environment:
+    <<: *env
+    DB_AUTO_CREATE: true
+    DB_AUTO_MIGRATE: true
+  healthcheck:
+    disable: true
+
+x-subscription: &subscription
+  <<: *app
+  image: kftlfd/repo-watch-go-subscription
+  build:
+    context: .
+    args:
+      SERVICE: subscription
+
+x-scanner: &scanner
+  <<: *app
+  image: kftlfd/repo-watch-go-scanner
+  build:
+    context: .
+    args:
+      SERVICE: scanner
+
+x-notification: &notification
+  <<: *app
+  image: kftlfd/repo-watch-go-notification
+  build:
+    context: .
+    args:
+      SERVICE: notification
 
 services:
   postgres:
@@ -54,44 +93,27 @@ services:
       retries: 10
       start_period: 30s
 
+  subscription-migrate:
+    <<: [ *migrate, *subscription ]
+
   subscription:
-    <<: *app
-    image: kftlfd/repo-watch-go-subscription
-    build:
-      context: .
-      args:
-        SERVICE: subscription
+    <<: *subscription
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      subscription-migrate:
+        condition: service_completed_successfully
     ports:
       - "3000:3000"
       - "4010:4000"
 
-  # example migration job
   scanner-migrate:
-    <<: *app
-    image: kftlfd/repo-watch-go-scanner
-    build:
-      context: .
-      args:
-        SERVICE: scanner
-    command: [ "migrate" ]
-    restart: no
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      <<: *env
-      DB_AUTO_CREATE: true
-      DB_AUTO_MIGRATE: true
-    healthcheck:
-      disable: true
+    <<: [ *migrate, *scanner ]
 
   scanner:
-    <<: *app
-    image: kftlfd/repo-watch-go-scanner
-    build:
-      context: .
-      args:
-        SERVICE: scanner
+    <<: *scanner
     depends_on:
       postgres:
         condition: service_healthy
@@ -99,20 +121,21 @@ services:
         condition: service_healthy
       scanner-migrate:
         condition: service_completed_successfully
-    environment:
-      <<: *env
-      DB_AUTO_CREATE: false
-      DB_AUTO_MIGRATE: false
     ports:
       - "4020:4000"
 
+  notification-migrate:
+    <<: [ *migrate, *notification ]
+
   notification:
-    <<: *app
-    image: kftlfd/repo-watch-go-notification
-    build:
-      context: .
-      args:
-        SERVICE: notification
+    <<: *notification
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      notification-migrate:
+        condition: service_completed_successfully
     ports:
       - "4030:4000"
 
@@ -128,4 +151,6 @@ services:
 
 volumes:
   postgres-data:
+    name: rw-go_postgres
   rabbitmq-data:
+    name: rw-go_rabbitmq
