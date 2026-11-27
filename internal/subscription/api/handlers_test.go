@@ -95,6 +95,7 @@ func newTestHandlerWithAuth(t *testing.T, svc subsService, authSvc authService) 
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	router := gin.New()
+	router.Use(httpserver.SecurityHeaders())
 	router.Use(httpserver.ObservabilityMiddleware(logger, fakeMetrics{}, httpserver.ObservabilityConfig{}))
 	router.Use(httpserver.Recovery())
 
